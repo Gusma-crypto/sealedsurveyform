@@ -2,10 +2,10 @@
 
 import { Fragment, useEffect, useRef, useState } from "react";
 import { ConnectButton, useCurrentAccount, useSignAndExecuteTransaction, useSignPersonalMessage, useSuiClient } from "@mysten/dapp-kit";
-import { Check, ChevronDown, Copy, Download, Database, Lock, LockOpen, RefreshCw, Loader2, ExternalLink, Wallet, Star } from "lucide-react";
+import { Check, ChevronDown, Copy, Download, Database, Lock, LockOpen, RefreshCw, Loader2, ExternalLink, Wallet, Star, Filter as FilterIcon } from "lucide-react";
 import { checkSealKeyServerReachable, readableSealError, SealAnswerPreview } from "@/components/SealAnswerPreview";
 import type { FormSchema, FormSubmission } from "@/types";
-import { loadAllForms, loadAllSubmissions, loadPublicForm, submissionsToCSV } from "@/lib/forms";
+import { loadAllForms, loadAllSubmissions, loadPublicForm } from "@/lib/forms";
 import { shortenAddress } from "@/lib/admin";
 import {
   buildSetSubmissionReviewTx,
@@ -22,12 +22,7 @@ import {
 import { downloadFromWalrus, shortenBlobId, blobUrl } from "@/lib/walrus";
 import { createSignedSealSessionKey, formatDecryptedSealValue, sealDecryptValueWithSession } from "@/lib/seal";
 // import { suiObjectUrl, suiTxUrl } from "@/lib/suiExplorer";
-import {
-  suiVisionObjectUrl,
-  suiVisionTxUrl,
-  suiScanObjectUrl,
-  suiScanTxUrl,
-} from "@/lib/suiExplorer";
+import { suiScanObjectUrl, suiScanTxUrl } from "@/lib/suiExplorer";
 
 
 type Filter = "all" | "new" | "reviewing" | "done" | "high";
@@ -65,6 +60,10 @@ function answerValuePreview(answer: FormSubmission["answers"][number]) {
   return String(answer.value);
 }
 
+function csvEscape(value: unknown) {
+  return `"${String(value ?? "").replace(/"/g, '""')}"`;
+}
+
 function submissionIdentity(submission: FormSubmission) {
   if (submission.suiFormObjectId && submission.chainSubmissionId) {
     return `${submission.suiFormObjectId}:${submission.chainSubmissionId}`;
@@ -82,6 +81,10 @@ function dedupeSubmissions(items: FormSubmission[]) {
     unique.push(item);
   }
   return unique;
+}
+
+function answerDecryptKey(submission: FormSubmission, answer: FormSubmission["answers"][number]) {
+  return `${submissionIdentity(submission)}:${answer.fieldId}:${answer.sealId ?? ""}`;
 }
 
 function formSchemaFromRegistryEntry(entry: FormRegistryEntry): FormSchema {
@@ -220,6 +223,99 @@ function DetailAnswerValue({
   return <span>{answer.value === null || answer.value === "" ? "-" : String(answer.value)}</span>;
 }
 
+function MediaAnswerAttachment({
+  answer,
+  field,
+}: {
+  answer: FormSubmission["answers"][number];
+  field?: FormSchema["fields"][number];
+}) {
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  if (!answer.fileBlobId) return null;
+
+  const url = blobUrl(answer.fileBlobId);
+  const isImage = field?.type === "screenshot";
+  const isVideo = field?.type === "video";
+  const mediaLabel = isImage ? "image" : isVideo ? "video" : "media";
+  const filename = typeof answer.value === "string" && answer.value.trim()
+    ? answer.value.trim()
+    : `sealedsurvey-${mediaLabel}-${shortenBlobId(answer.fileBlobId)}`;
+
+  const downloadMedia = async () => {
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Walrus file download failed (${response.status}).`);
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      anchor.click();
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : "Unable to download media.");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-white">
+      {isImage && (
+        <a href={url} target="_blank" rel="noopener noreferrer" className="block bg-slate-50">
+          <img
+            src={url}
+            alt={field?.label ?? "Uploaded image"}
+            className="max-h-72 w-full object-contain"
+            loading="lazy"
+          />
+        </a>
+      )}
+      {isVideo && (
+        <video controls className="max-h-72 w-full bg-black" preload="metadata">
+          <source src={url} />
+        </video>
+      )}
+      {!isImage && !isVideo && (
+        <div className="bg-slate-50 px-3 py-3 text-xs text-slate-500">
+          Uploaded media: {shortenBlobId(answer.fileBlobId)}
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 px-3 py-2">
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-700 hover:text-sky-900"
+        >
+          <ExternalLink size={12} />
+          View {mediaLabel}
+        </a>
+        <button
+          type="button"
+          onClick={downloadMedia}
+          disabled={downloading}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-700 hover:text-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {downloading ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+          {downloading ? "Downloading" : `Download ${mediaLabel}`}
+        </button>
+        <span className="font-mono text-[11px] text-slate-400">
+          {shortenBlobId(answer.fileBlobId)}
+        </span>
+      </div>
+      {downloadError && (
+        <div className="border-t border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
+          {downloadError}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
     return navigator.clipboard.writeText(text);
@@ -296,6 +392,14 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Filter>("all");
   const [selectedFormId, setSelectedFormId] = useState<string | null>(null);
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
+  const [emailFilter, setEmailFilter] = useState("");
+  const [walletFilter, setWalletFilter] = useState("");
+  const [dateFilter, setDateFilter] = useState("");
+  const [txStatusFilter, setTxStatusFilter] = useState<"all" | "onchain" | "walrus" | "reviewed">("all");
+  const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
+  const [exporting, setExporting] = useState<"csv" | "json" | null>(null);
+  const [preparingFilters, setPreparingFilters] = useState(false);
   const [copiedFormId, setCopiedFormId] = useState<string | null>(null);
   const [isDemo, setIsDemo] = useState(false);
   const [source, setSource] = useState<"sui" | "local" | "demo">("demo");
@@ -422,27 +526,56 @@ export default function DashboardPage() {
       : selectedForm.formTitle
     : null;
 
+  function fieldForAnswerValue(submission: FormSubmission, fieldId: string) {
+    const form = forms.find((item) => item.id === submission.formId);
+    return form?.fields.find((field) => field.id === fieldId);
+  }
+
+  function emailForSubmission(submission: FormSubmission) {
+    const emailAnswer = submission.answers.find((answer) => {
+      const field = fieldForAnswerValue(submission, answer.fieldId);
+      return field?.type === "email" || field?.label.toLowerCase().includes("email");
+    });
+    if (!emailAnswer) return "";
+    const value = emailAnswer.encrypted
+      ? decryptedAnswers[answerDecryptKey(submission, emailAnswer)]
+      : emailAnswer.value;
+    return typeof value === "string" ? value.toLowerCase() : "";
+  }
+
+  const matchesAdvancedFilters = (submission: FormSubmission) => {
+    const normalizedWallet = walletFilter.trim().toLowerCase();
+    if (normalizedWallet && !submission.submitterAddress?.toLowerCase().includes(normalizedWallet)) return false;
+    if (dateFilter && submission.submittedAt.slice(0, 10) !== dateFilter) return false;
+    if (txStatusFilter === "onchain" && !(submission.registryTxDigest || submission.chainSubmissionId)) return false;
+    if (txStatusFilter === "walrus" && (submission.registryTxDigest || submission.chainSubmissionId)) return false;
+    if (txStatusFilter === "reviewed" && !submission.reviewTxDigest) return false;
+    const normalizedEmail = emailFilter.trim().toLowerCase();
+    if (normalizedEmail) {
+      if (submission.answers.length === 0) return true;
+      const emailValue = emailForSubmission(submission);
+      if (!emailValue.includes(normalizedEmail)) return false;
+    }
+    return true;
+  };
+
   const filtered = visibleSubmissions.filter((s) => {
     if (selectedFormId && s.formId !== selectedFormId) return false;
     if (filter === "all") return true;
     if (filter === "high") return s.priority === "high";
     return s.status === filter;
-  });
+  })
+    .filter(matchesAdvancedFilters)
+    .sort((a, b) => {
+      const diff = new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime();
+      return sortOrder === "newest" ? diff : -diff;
+    });
   const selectedSubmission =
     selectedSubmissionId
       ? filtered.find((submission) => submissionIdentity(submission) === selectedSubmissionId) ?? null
       : null;
   const selectedEncryptedAnswers = selectedSubmission?.answers.filter((answer) => answer.encrypted && answer.encryption === "seal" && answer.sealId) ?? [];
   const selectedSubmissionIdentity = selectedSubmission ? submissionIdentity(selectedSubmission) : null;
-
-  const exportCSV = () => {
-    const csv = submissionsToCSV(visibleSubmissions);
-    const blob = new Blob([csv], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `sealedsurvey-export-${Date.now()}.csv`;
-    a.click();
-  };
 
   const updateReview = async (
     submission: FormSubmission,
@@ -479,9 +612,6 @@ export default function DashboardPage() {
       setUpdatingReviewId(null);
     }
   };
-
-  const answerDecryptKey = (submission: FormSubmission, answer: FormSubmission["answers"][number]) =>
-    `${submissionIdentity(submission)}:${answer.fieldId}:${answer.sealId ?? ""}`;
 
   const loadSubmissionDetail = async (submission: FormSubmission) => {
     const identity = submissionIdentity(submission);
@@ -534,6 +664,118 @@ export default function DashboardPage() {
     loadSubmissionDetail(submission);
   };
 
+  useEffect(() => {
+    if (!emailFilter.trim()) return;
+    const missingDetails = visibleSubmissions.filter((submission) => submission.answers.length === 0);
+    if (missingDetails.length === 0) return;
+    missingDetails.slice(0, 50).forEach((submission) => {
+      loadSubmissionDetail(submission);
+    });
+  }, [emailFilter]);
+
+  const ensureSubmissionDetails = async (items: FormSubmission[]) => {
+    const results = await Promise.all(
+      items.map(async (submission) => {
+        if (submission.answers.length > 0 || submission.walrusBlobId.startsWith("demo-")) return submission;
+        try {
+          const detail = await downloadFromWalrus<FormSubmission>(submission.walrusBlobId);
+          return {
+            ...submission,
+            ...detail,
+            id: submission.id,
+            formId: submission.formId || detail.formId,
+            formTitle: submission.formTitle || detail.formTitle,
+            walrusBlobId: submission.walrusBlobId,
+            submitterAddress: detail.submitterAddress ?? submission.submitterAddress,
+            formOwnerAddress: detail.formOwnerAddress ?? submission.formOwnerAddress,
+            registryTxDigest: submission.registryTxDigest ?? detail.registryTxDigest,
+            chainSubmissionId: submission.chainSubmissionId ?? detail.chainSubmissionId,
+            reviewTxDigest: submission.reviewTxDigest ?? detail.reviewTxDigest,
+            status: submission.status ?? detail.status,
+            priority: submission.priority ?? detail.priority,
+          } satisfies FormSubmission;
+        } catch {
+          return submission;
+        }
+      })
+    );
+    setSubmissions((current) =>
+      current.map((item) => {
+        const found = results.find((result) => submissionIdentity(result) === submissionIdentity(item));
+        return found ?? item;
+      })
+    );
+    return results;
+  };
+
+  const exportRowsForSubmissions = (items: FormSubmission[]) =>
+    items.map((submission) => {
+      const answers = submission.answers.map((answer) => {
+        const field = fieldForAnswerValue(submission, answer.fieldId);
+        return {
+          fieldId: answer.fieldId,
+          label: field?.label ?? answer.fieldId,
+          value: answer.encrypted
+            ? decryptedAnswers[answerDecryptKey(submission, answer)] ?? "Encrypted answer"
+            : answer.value,
+          encrypted: Boolean(answer.encrypted),
+          fileBlobId: answer.fileBlobId,
+        };
+      });
+      return {
+        respondentId: submission.chainSubmissionId ?? submission.id,
+        email: emailForSubmission(submission),
+        walletAddress: submission.submitterAddress ?? "",
+        txDigest: submission.registryTxDigest ?? submission.reviewTxDigest ?? "",
+        walrusBlobId: submission.walrusBlobId,
+        submittedAt: submission.submittedAt,
+        txStatus: submission.registryTxDigest || submission.chainSubmissionId ? "onchain" : "walrus-only",
+        formAnswers: answers,
+      };
+    });
+
+  const exportFiltered = async (format: "csv" | "json") => {
+    setExporting(format);
+    try {
+      const detailed = (await ensureSubmissionDetails(filtered)).filter(matchesAdvancedFilters);
+      const rows = exportRowsForSubmissions(detailed);
+      const content = format === "json"
+        ? JSON.stringify(rows, null, 2)
+        : [
+            ["respondent id", "email", "wallet address", "tx digest", "walrus blob id", "submitted at", "tx status", "form answers"].map(csvEscape).join(","),
+            ...rows.map((row) =>
+              [
+                row.respondentId,
+                row.email,
+                row.walletAddress,
+                row.txDigest,
+                row.walrusBlobId,
+                row.submittedAt,
+                row.txStatus,
+                JSON.stringify(row.formAnswers),
+              ].map(csvEscape).join(",")
+            ),
+          ].join("\n");
+      const blob = new Blob([content], { type: format === "json" ? "application/json" : "text/csv" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `sealedsurvey-filtered-${Date.now()}.${format}`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const clearAdvancedFilters = () => {
+    setEmailFilter("");
+    setWalletFilter("");
+    setDateFilter("");
+    setTxStatusFilter("all");
+    setSortOrder("newest");
+    setSelectedFormId(null);
+  };
+
   const getSignedSealSessionKey = async () => {
     if (!account) {
       throw new Error("Connect the form owner wallet to decrypt responses.");
@@ -558,6 +800,79 @@ export default function DashboardPage() {
       sessionKey,
     };
     return sessionKey;
+  };
+
+  const decryptSubmissionsForFilter = async (items: FormSubmission[]) => {
+    if (!account) return;
+    const decryptable = items
+      .filter((submission) => {
+        if (submission.formOwnerAddress && submission.formOwnerAddress.toLowerCase() !== account.address.toLowerCase()) {
+          return false;
+        }
+        return submission.answers.some((answer) =>
+          answer.encrypted &&
+          answer.encryption === "seal" &&
+          answer.sealId &&
+          !decryptedAnswers[answerDecryptKey(submission, answer)]
+        );
+      });
+
+    if (decryptable.length === 0) return;
+
+    setDecryptError(null);
+    setDecryptingSubmissionId("filter-bulk-decrypt");
+    try {
+      await checkSealKeyServerReachable();
+      const sessionKey = await getSignedSealSessionKey();
+      const next: Record<string, string> = {};
+
+      for (const submission of decryptable) {
+        for (const answer of submission.answers) {
+          if (!answer.encrypted || answer.encryption !== "seal" || !answer.sealId) continue;
+          const key = answerDecryptKey(submission, answer);
+          if (decryptedAnswers[key] || next[key]) continue;
+          const parsed = await sealDecryptValueWithSession({
+            ciphertextBase64: String(answer.value ?? ""),
+            id: answer.sealId,
+            formId: submission.formId,
+            accountAddress: account.address,
+            sessionKey,
+            txBuildClient: suiClient as any,
+          });
+          next[key] = formatDecryptedSealValue(parsed);
+        }
+      }
+
+      if (Object.keys(next).length > 0) {
+        setDecryptedAnswers((current) => ({ ...current, ...next }));
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.toLowerCase().includes("expired")) {
+        sealSessionRef.current = null;
+      }
+      setDecryptError(readableSealError(err));
+    } finally {
+      setDecryptingSubmissionId(null);
+    }
+  };
+
+  const prepareFilterData = async () => {
+    if (!hasOwnedForms || preparingFilters) return;
+    setPreparingFilters(true);
+    try {
+      const detailed = await ensureSubmissionDetails(visibleSubmissions);
+      await decryptSubmissionsForFilter(detailed);
+    } finally {
+      setPreparingFilters(false);
+    }
+  };
+
+  const toggleFilterPanel = () => {
+    const opening = !showFilterPanel;
+    setShowFilterPanel(opening);
+    if (opening) {
+      prepareFilterData();
+    }
   };
 
   const decryptSelectedSubmission = async () => {
@@ -682,6 +997,11 @@ export default function DashboardPage() {
   };
   const formForSubmission = (submission: FormSubmission) =>
     forms.find((item) => item.id === submission.formId);
+  const formTitleForSubmission = (submission: FormSubmission) =>
+    formForSubmission(submission)?.title ??
+    formCounts[submission.formId]?.title ??
+    submission.formTitle ??
+    "Untitled form";
   const detailRowsForSubmission = (submission: FormSubmission) => {
     const form = formForSubmission(submission);
     const emailField = form?.fields.find(
@@ -719,6 +1039,36 @@ export default function DashboardPage() {
     };
   };
 
+  const mySubmissionGroups = Object.values(
+    mySubmissions.reduce<Record<string, { id: string; title: string; latestAt: string; submissions: FormSubmission[] }>>(
+      (acc, submission) => {
+        const key = submission.formId || submission.formTitle || "untitled-form";
+        const existing = acc[key] ?? {
+          id: key,
+          title: formTitleForSubmission(submission),
+          latestAt: submission.submittedAt,
+          submissions: [],
+        };
+        existing.title = formTitleForSubmission(submission);
+        existing.latestAt =
+          new Date(submission.submittedAt).getTime() > new Date(existing.latestAt).getTime()
+            ? submission.submittedAt
+            : existing.latestAt;
+        existing.submissions.push(submission);
+        acc[key] = existing;
+        return acc;
+      },
+      {}
+    )
+  )
+    .map((group) => ({
+      ...group,
+      submissions: group.submissions.sort(
+        (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
+      ),
+    }))
+    .sort((a, b) => new Date(b.latestAt).getTime() - new Date(a.latestAt).getTime());
+
   if (!account) {
     return (
       <div className="mx-auto flex min-h-[calc(100vh-3.5rem)] max-w-xl items-center justify-center px-4">
@@ -751,16 +1101,6 @@ export default function DashboardPage() {
           <p className="mt-1 text-xs text-slate-400">
             Connected as <span className="font-mono">{shortenAddress(account.address)}</span>
           </p>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={load} className="btn btn-secondary text-xs">
-            <RefreshCw size={13} /> Refresh
-          </button>
-          {hasOwnedForms && (
-            <button onClick={exportCSV} disabled={visibleSubmissions.length === 0} className="btn btn-secondary text-xs">
-              <Download size={13} /> Export CSV
-            </button>
-          )}
         </div>
       </div>
 
@@ -887,23 +1227,45 @@ export default function DashboardPage() {
             <h2 className="text-sm font-semibold text-slate-900">My submission receipts</h2>
           </div>
           <div className="divide-y divide-slate-100">
-            {mySubmissions.map((submission) => (
-              <div key={submissionIdentity(submission)} className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <div className="text-sm font-medium text-slate-800">{submission.formTitle}</div>
-                  <div className="text-xs text-slate-400">
-                    {new Date(submission.submittedAt).toLocaleDateString("id-ID", {
-                      day: "numeric", month: "short", year: "numeric",
-                    })}
+            {mySubmissionGroups.map((group) => (
+              <div key={group.id} className="px-4 py-4">
+                <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">{group.title}</div>
+                    <div className="text-xs text-slate-400">
+                      {group.submissions.length} receipt{group.submissions.length === 1 ? "" : "s"} · Latest{" "}
+                      {new Date(group.latestAt).toLocaleDateString("id-ID", {
+                        day: "numeric", month: "short", year: "numeric",
+                      })}
+                    </div>
                   </div>
+                  <span className="w-fit rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-500">
+                    {group.submissions.length}
+                  </span>
                 </div>
-                <a
-                  href={`/receipt/${encodeURIComponent(submission.walrusBlobId)}`}
-                  className="btn btn-secondary px-3 py-1.5 text-xs"
-                >
-                  <ExternalLink size={12} />
-                  Receipt
-                </a>
+                <div className="divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                  {group.submissions.map((submission, index) => (
+                    <div key={submissionIdentity(submission)} className="flex flex-col gap-3 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <div className="text-sm font-medium text-slate-800">
+                          Submission #{group.submissions.length - index}
+                        </div>
+                        <div className="text-xs text-slate-400">
+                          {new Date(submission.submittedAt).toLocaleDateString("id-ID", {
+                            day: "numeric", month: "short", year: "numeric",
+                          })}
+                        </div>
+                      </div>
+                      <a
+                        href={`/receipt/${encodeURIComponent(submission.walrusBlobId)}`}
+                        className="btn btn-secondary px-3 py-1.5 text-xs"
+                      >
+                        <ExternalLink size={12} />
+                        Receipt
+                      </a>
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
             {!loading && mySubmissions.length === 0 && (
@@ -918,29 +1280,159 @@ export default function DashboardPage() {
       {/* Filters */}
       {hasOwnedForms && (
       <>
-      <div className="mb-4 flex flex-wrap gap-2">
-        {selectedFormId && (
+      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-wrap gap-2">
+          {selectedFormId && (
+            <button
+              onClick={() => setSelectedFormId(null)}
+              className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs text-sky-700 shadow-sm transition-colors hover:border-sky-300"
+            >
+              {`Form: ${selectedFormTitle ?? "Selected"} x`}
+            </button>
+          )}
+          {(["all", "new", "reviewing", "done", "high"] as Filter[]).map((f) => (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`rounded-full border px-3 py-1.5 text-xs capitalize shadow-sm transition-colors ${
+                filter === f
+                  ? "bg-slate-950 text-white border-slate-950"
+                  : "bg-white/80 text-slate-500 border-slate-200 hover:border-slate-300 hover:text-slate-950"
+              }`}
+            >
+              {f === "high" ? "High priority" : f === "all" ? "All" : f}
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+          <span className="rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 text-xs text-slate-500 shadow-sm">
+            {filtered.length} filtered
+          </span>
           <button
-            onClick={() => setSelectedFormId(null)}
-            className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs text-sky-700 shadow-sm transition-colors hover:border-sky-300"
+            type="button"
+            onClick={toggleFilterPanel}
+            className={`btn px-3 py-1.5 text-xs ${showFilterPanel ? "btn-primary" : "btn-secondary"}`}
           >
-            {`Form: ${selectedFormTitle ?? "Selected"} x`}
+            {preparingFilters ? <Loader2 size={13} className="animate-spin" /> : <FilterIcon size={13} />}
+            {preparingFilters ? "Preparing" : "Filter"}
           </button>
-        )}
-        {(["all", "new", "reviewing", "done", "high"] as Filter[]).map((f) => (
           <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`rounded-full border px-3 py-1.5 text-xs capitalize shadow-sm transition-colors ${
-              filter === f
-                ? "bg-slate-950 text-white border-slate-950"
-                : "bg-white/80 text-slate-500 border-slate-200 hover:border-slate-300 hover:text-slate-950"
-            }`}
+            type="button"
+            onClick={load}
+            className="btn btn-secondary px-3 py-1.5 text-xs"
           >
-            {f === "high" ? "High priority" : f === "all" ? "All" : f}
+            <RefreshCw size={13} />
+            Refresh
           </button>
-        ))}
+          <button
+            type="button"
+            onClick={() => exportFiltered("csv")}
+            disabled={exporting !== null || filtered.length === 0}
+            className="btn btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {exporting === "csv" ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+            Export CSV
+          </button>
+          <button
+            type="button"
+            onClick={() => exportFiltered("json")}
+            disabled={exporting !== null || filtered.length === 0}
+            className="btn btn-secondary px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {exporting === "json" ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+            Export JSON
+          </button>
+        </div>
       </div>
+
+      {showFilterPanel && (
+        <div className="mb-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+            <label className="text-xs font-medium text-slate-500">
+              Search email
+              <input
+                value={emailFilter}
+                onChange={(event) => setEmailFilter(event.target.value)}
+                placeholder="email@example.com"
+                className="input mt-1 text-sm"
+              />
+            </label>
+            <label className="text-xs font-medium text-slate-500">
+              Search wallet address
+              <input
+                value={walletFilter}
+                onChange={(event) => setWalletFilter(event.target.value)}
+                placeholder="0x..."
+                className="input mt-1 text-sm"
+              />
+            </label>
+            <label className="text-xs font-medium text-slate-500">
+              Form
+              <select
+                value={selectedFormId ?? ""}
+                onChange={(event) => setSelectedFormId(event.target.value || null)}
+                className="input mt-1 text-sm"
+              >
+                <option value="">All forms</option>
+                {Object.entries(formCounts).map(([formId, item]) => (
+                  <option key={formId} value={formId}>
+                    {item.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs font-medium text-slate-500">
+              Submission date
+              <input
+                type="date"
+                value={dateFilter}
+                onChange={(event) => setDateFilter(event.target.value)}
+                className="input mt-1 text-sm"
+              />
+            </label>
+            <label className="text-xs font-medium text-slate-500">
+              Tx status
+              <select
+                value={txStatusFilter}
+                onChange={(event) => setTxStatusFilter(event.target.value as typeof txStatusFilter)}
+                className="input mt-1 text-sm"
+              >
+                <option value="all">All tx statuses</option>
+                <option value="onchain">Onchain</option>
+                <option value="walrus">Walrus-only</option>
+                <option value="reviewed">Reviewed onchain</option>
+              </select>
+            </label>
+            <label className="text-xs font-medium text-slate-500">
+              Sort
+              <select
+                value={sortOrder}
+                onChange={(event) => setSortOrder(event.target.value as typeof sortOrder)}
+                className="input mt-1 text-sm"
+              >
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+              </select>
+            </label>
+          </div>
+          <div className="mt-4 flex flex-col gap-2 border-t border-slate-100 pt-3 text-xs text-slate-400 sm:flex-row sm:items-center sm:justify-between">
+            <span>
+              {emailFilter.trim() && loadingDetailId
+                ? "Loading respondent details for email filter..."
+                : preparingFilters || decryptingSubmissionId === "filter-bulk-decrypt"
+                  ? "Loading and decrypting respondent details for filter..."
+                : `${filtered.length} of ${visibleSubmissions.length} respondent reports match.`}
+            </span>
+            <button
+              type="button"
+              onClick={clearAdvancedFilters}
+              className="btn btn-secondary w-full px-3 py-1.5 text-xs sm:w-auto"
+            >
+              Clear filters
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Owner-only table */}
       <div className="panel overflow-hidden">
@@ -974,6 +1466,7 @@ export default function DashboardPage() {
 	                const identity = submissionIdentity(s);
 	                const expanded = selectedSubmissionId === identity;
 	                const detailRows = detailRowsForSubmission(s);
+	                const displayFormTitle = formTitleForSubmission(s);
 	                return (
 	                <Fragment key={identity}>
 	                <tr
@@ -983,11 +1476,11 @@ export default function DashboardPage() {
 	                >
 	                  <td className="px-4 py-3 text-slate-800 font-medium">
 	                    <div className="flex flex-col gap-1">
-	                      <span>{answerValuePreview(s.answers[0] ?? { fieldId: "", value: null }).slice(0, 64)}</span>
+	                      <span>{displayFormTitle}</span>
                       <span className="text-xs font-normal text-slate-400">{s.answers.length} answer{s.answers.length === 1 ? "" : "s"}</span>
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-slate-400">{s.formTitle}</td>
+                  <td className="px-4 py-3 text-slate-400">{displayFormTitle}</td>
                   <td className="px-4 py-3">
                     {s.suiFormObjectId && s.chainSubmissionId ? (
                       <select
@@ -1210,15 +1703,7 @@ export default function DashboardPage() {
 	                                      decryptedValue={decryptedAnswers[answerDecryptKey(s, answer)]}
 	                                    />
 	                                    {answer.fileBlobId && (
-	                                      <a
-	                                        href={blobUrl(answer.fileBlobId)}
-	                                        target="_blank"
-	                                        rel="noopener noreferrer"
-	                                        className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-700 hover:text-sky-900"
-	                                      >
-	                                        <ExternalLink size={12} />
-	                                        Media {shortenBlobId(answer.fileBlobId)}
-	                                      </a>
+	                                      <MediaAnswerAttachment answer={answer} field={field} />
 	                                    )}
 	                                  </>
 	                                ) : (

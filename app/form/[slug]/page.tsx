@@ -23,6 +23,8 @@ import {
   findSubmissionEventId,
   isSuiRegistryConfigured,
   loadFormSchemaFromSuiObject,
+  loadLocalSubmissionRegistryEntries,
+  loadSubmissionEntriesFromSui,
   recordLocalSubmissionEntry,
   type SubmissionRegistryEntry,
 } from "@/lib/submissionRegistry";
@@ -36,6 +38,7 @@ type SubmitState =
   | { status: "draft"; message: string };
 
 const SUBMISSION_DRAFT_PREFIX = "sealedsurvey:submission-draft:";
+const UNIQUE_SUBMISSION_KEY = "sealedsurvey:unique-submissions";
 const WALRUS_MAX_BLOB_SIZE_BYTES = 14_273_391_930; // Current Walrus maximum blob size is about 13.3 GiB.
 const DEFAULT_IMAGE_UPLOAD_LIMIT_BYTES = 15 * 1024 * 1024;
 const DEFAULT_VIDEO_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024;
@@ -48,6 +51,39 @@ type SubmissionDraft = {
   fileNames: Record<string, string>;
   savedAt: string;
 };
+
+type UniqueSubmissionRecord = {
+  formId: string;
+  walletAddress: string;
+  email: string;
+  blobId: string;
+  txDigest?: string;
+  submittedAt: string;
+};
+
+function normalizeUniqueValue(value?: string | null) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function loadUniqueSubmissionRecords(): UniqueSubmissionRecord[] {
+  if (typeof window === "undefined") return [];
+  try {
+    return JSON.parse(localStorage.getItem(UNIQUE_SUBMISSION_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function saveUniqueSubmissionRecord(record: UniqueSubmissionRecord) {
+  const records = loadUniqueSubmissionRecords().filter(
+    (item) =>
+      !(
+        item.formId === record.formId &&
+        (item.walletAddress === record.walletAddress || item.email === record.email)
+      )
+  );
+  localStorage.setItem(UNIQUE_SUBMISSION_KEY, JSON.stringify([record, ...records]));
+}
 
 function emptyValueFor(field: FormField) {
   if (field.type === "checkbox") return [];
@@ -63,6 +99,61 @@ function isEmpty(value: string | string[] | number | null) {
 function isValidEmail(value: string | string[] | number | null) {
   if (typeof value !== "string") return false;
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function findEmailField(form: FormSchema) {
+  return form.fields.find(
+    (field) => field.type === "email" || field.label.trim().toLowerCase() === "email"
+  );
+}
+
+function getNormalizedEmail(form: FormSchema, answers: Answers) {
+  const emailField = findEmailField(form);
+  const value = emailField ? answers[emailField.id] : null;
+  return typeof value === "string" ? normalizeUniqueValue(value) : "";
+}
+
+async function findDuplicateSubmission({
+  form,
+  walletAddress,
+  email,
+  suiClient,
+}: {
+  form: FormSchema;
+  walletAddress: string;
+  email: string;
+  suiClient: any;
+}) {
+  const localUnique = loadUniqueSubmissionRecords();
+  if (localUnique.some((record) => record.formId === form.id && record.walletAddress === walletAddress)) {
+    return "This wallet has already submitted this form.";
+  }
+  if (email && localUnique.some((record) => record.formId === form.id && record.email === email)) {
+    return "This email has already submitted this form.";
+  }
+
+  const localRegistryDuplicate = loadLocalSubmissionRegistryEntries().some(
+    (entry) =>
+      entry.formId === form.id &&
+      normalizeUniqueValue(entry.submitterAddress) === walletAddress
+  );
+  if (localRegistryDuplicate) {
+    return "This wallet has already submitted this form.";
+  }
+
+  if (isSuiRegistryConfigured()) {
+    const chainEntries = await loadSubmissionEntriesFromSui(suiClient).catch(() => []);
+    const chainDuplicate = chainEntries.some(
+      (entry) =>
+        entry.formId === form.id &&
+        normalizeUniqueValue(entry.submitterAddress) === walletAddress
+    );
+    if (chainDuplicate) {
+      return "This wallet has already submitted this form on-chain.";
+    }
+  }
+
+  return null;
 }
 
 function formatBytes(bytes: number) {
@@ -446,13 +537,29 @@ export default function PublicFormPage() {
       return;
     }
 
+    const normalizedWalletAddress = normalizeUniqueValue(account.address);
+    const normalizedEmail = getNormalizedEmail(form, answers);
+    const duplicateMessage = await findDuplicateSubmission({
+      form,
+      walletAddress: normalizedWalletAddress,
+      email: normalizedEmail,
+      suiClient,
+    });
+    if (duplicateMessage) {
+      setSubmitState({
+        status: "error",
+        message: duplicateMessage,
+      });
+      return;
+    }
+
     setSubmitState({ status: "submitting" });
 
     try {
       const normalizedAnswers: FieldAnswer[] = [];
       const submissionId = uuidv4();
       const walrusSigner = createWalletWalrusSigner({
-        address: account.address,
+        address: normalizedWalletAddress,
         signAndExecuteTransaction: signAndExecute,
       });
 
@@ -469,7 +576,12 @@ export default function PublicFormPage() {
             fileBlobId: uploaded.blobId,
           });
         } else {
-          const rawValue = answers[field.id] ?? emptyValueFor(field);
+          const sourceValue = answers[field.id] ?? emptyValueFor(field);
+          const rawValue =
+            (field.type === "email" || field.label.trim().toLowerCase() === "email") &&
+            typeof sourceValue === "string"
+              ? normalizeUniqueValue(sourceValue)
+              : sourceValue;
           if (shouldEncrypt && !isSealConfigured()) {
             throw new Error(
               "Seal encryption is enabled for this form, but Seal is not configured. Check NEXT_PUBLIC_SUI_PACKAGE_ID, NEXT_PUBLIC_SEAL_KEY_SERVERS, and NEXT_PUBLIC_SEAL_THRESHOLD."
@@ -513,7 +625,7 @@ export default function PublicFormPage() {
         encrypted: form.sealEncrypted || form.fields.some((field) => field.encrypted),
         priority: inferPriority(normalizedAnswers),
         status: "new",
-        submitterAddress: account.address,
+        submitterAddress: normalizedWalletAddress,
         formOwnerAddress: form.ownerAddress,
       };
 
@@ -522,7 +634,7 @@ export default function PublicFormPage() {
         formId: form.id,
         formTitle: form.title,
         submissionBlobId: blobId,
-        submitterAddress: account.address,
+        submitterAddress: normalizedWalletAddress,
         encrypted: submission.encrypted,
         timestamp: submission.submittedAt,
         suiFormObjectId: form.suiFormObjectId,
@@ -553,6 +665,14 @@ export default function PublicFormPage() {
       }
 
       recordLocalSubmissionEntry(registryEntry);
+      saveUniqueSubmissionRecord({
+        formId: form.id,
+        walletAddress: normalizedWalletAddress,
+        email: normalizedEmail,
+        blobId,
+        txDigest: registryEntry.txDigest,
+        submittedAt: submission.submittedAt,
+      });
       clearSubmissionDraft(form.id);
       router.push(`/receipt/${encodeURIComponent(blobId)}`);
     } catch (err) {

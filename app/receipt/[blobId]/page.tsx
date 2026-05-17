@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
+import { ConnectButton, useCurrentAccount } from "@mysten/dapp-kit";
 import {
   AlertCircle,
   Check,
@@ -11,25 +12,82 @@ import {
   FileText,
   Loader2,
   Lock,
+  Download,
   Radio,
-  ShieldCheck,
 } from "lucide-react";
 import { SealAnswerPreview } from "@/components/SealAnswerPreview";
 import type { FieldAnswer, FormSubmission } from "@/types";
 import { blobUrl, downloadFromWalrus, shortenBlobId } from "@/lib/walrus";
 import { findLocalSubmissionEntry } from "@/lib/submissionRegistry";
 // import { suiObjectUrl, suiTxUrl } from "@/lib/suiExplorer";
-import {
-  suiVisionObjectUrl,
-  suiVisionTxUrl,
-  suiScanObjectUrl,
-  suiScanTxUrl,
-} from "@/lib/suiExplorer";
+import { suiScanObjectUrl, suiScanTxUrl } from "@/lib/suiExplorer";
 
 function formatAnswer(answer: FieldAnswer) {
   if (Array.isArray(answer.value)) return answer.value.join(", ");
   if (answer.value === null || answer.value === "") return "No answer";
   return String(answer.value);
+}
+
+function normalizeAddress(value?: string) {
+  return value?.trim().toLowerCase() ?? "";
+}
+
+function ReceiptMediaAttachment({ answer }: { answer: FieldAnswer }) {
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+  if (!answer.fileBlobId) return null;
+
+  const url = blobUrl(answer.fileBlobId);
+  const filename = typeof answer.value === "string" && answer.value.trim()
+    ? answer.value.trim()
+    : `sealedsurvey-media-${shortenBlobId(answer.fileBlobId)}`;
+
+  const downloadMedia = async () => {
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`Walrus file download failed (${response.status}).`);
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      anchor.click();
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : "Unable to download media.");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-700 hover:text-sky-900"
+      >
+        View uploaded file
+        <ExternalLink size={12} />
+      </a>
+      <button
+        type="button"
+        onClick={downloadMedia}
+        disabled={downloading}
+        className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-700 hover:text-sky-900 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        {downloading ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+        {downloading ? "Downloading" : "Download file"}
+      </button>
+      <span className="font-mono text-[11px] text-slate-400">
+        {shortenBlobId(answer.fileBlobId)}
+      </span>
+      {downloadError && <span className="basis-full text-xs text-red-600">{downloadError}</span>}
+    </div>
+  );
 }
 
 function Step({
@@ -71,6 +129,7 @@ function Step({
 
 export default function ReceiptPage() {
   const params = useParams<{ blobId: string }>();
+  const account = useCurrentAccount();
   const blobId = useMemo(() => decodeURIComponent(params.blobId), [params.blobId]);
   const [submission, setSubmission] = useState<FormSubmission | null>(null);
   const [loading, setLoading] = useState(true);
@@ -130,6 +189,11 @@ export default function ReceiptPage() {
       </div>
     );
   }
+
+  const submitterAddress = normalizeAddress(submission.submitterAddress);
+  const connectedAddress = normalizeAddress(account?.address);
+  const canReviewSubmission = Boolean(submitterAddress && connectedAddress && submitterAddress === connectedAddress);
+  const requiresSubmitterWallet = Boolean(submitterAddress);
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-8 sm:py-12">
@@ -328,38 +392,36 @@ export default function ReceiptPage() {
         )}
 
         <div className="space-y-3 p-5">
-          <p className="section-label mb-3">Submitted answers</p>
-          {submission.answers.map((answer, index) => (
-            <div key={`${answer.fieldId}-${index}`} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.14em] text-slate-400">
-                <FileText size={12} />
-                Field {index + 1}
-              </div>
-              <p className="text-sm leading-6 text-slate-800">
-                {answer.encrypted ? (
-                  <SealAnswerPreview
-                    answer={answer}
-                    ownerAddress={submission.formOwnerAddress}
-                    formId={submission.formId}
-                    maxLength={180}
-                  />
-                ) : (
-                  formatAnswer(answer)
-                )}
-              </p>
-              {answer.fileBlobId && (
-                <a
-                  href={blobUrl(answer.fileBlobId)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-sky-700 hover:text-sky-900"
-                >
-                  View uploaded file
-                  <ExternalLink size={12} />
-                </a>
-              )}
+          <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <p className="section-label">Submitted answers</p>
+            {requiresSubmitterWallet && !canReviewSubmission && <ConnectButton connectText="Connect submitter wallet" />}
+          </div>
+          {requiresSubmitterWallet && !canReviewSubmission ? (
+            <div className="rounded-lg border border-amber-100 bg-amber-50 p-4 text-sm leading-6 text-amber-800">
+              Connect the submitter wallet to review this submission. Other wallets cannot view these answers.
             </div>
-          ))}
+          ) : (
+            submission.answers.map((answer, index) => (
+              <div key={`${answer.fieldId}-${index}`} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.14em] text-slate-400">
+                  <FileText size={12} />
+                  Field {index + 1}
+                </div>
+                <p className="text-sm leading-6 text-slate-800">
+                  {answer.encrypted ? (
+                    <SealAnswerPreview
+                      answer={answer}
+                      formId={submission.formId}
+                      maxLength={180}
+                    />
+                  ) : (
+                    formatAnswer(answer)
+                  )}
+                </p>
+                {answer.fileBlobId && <ReceiptMediaAttachment answer={answer} />}
+              </div>
+            ))
+          )}
         </div>
 
         <div className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50/70 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">

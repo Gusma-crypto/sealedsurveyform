@@ -45,6 +45,7 @@ build/
 
 # Move cache
 Move.lock
+move/
 
 # Sui client
 .sui/
