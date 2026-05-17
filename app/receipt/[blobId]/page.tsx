@@ -18,7 +18,13 @@ import { SealAnswerPreview } from "@/components/SealAnswerPreview";
 import type { FieldAnswer, FormSubmission } from "@/types";
 import { blobUrl, downloadFromWalrus, shortenBlobId } from "@/lib/walrus";
 import { findLocalSubmissionEntry } from "@/lib/submissionRegistry";
-import { suiObjectUrl, suiTxUrl } from "@/lib/suiExplorer";
+// import { suiObjectUrl, suiTxUrl } from "@/lib/suiExplorer";
+import {
+  suiVisionObjectUrl,
+  suiVisionTxUrl,
+  suiScanObjectUrl,
+  suiScanTxUrl,
+} from "@/lib/suiExplorer";
 
 function formatAnswer(answer: FieldAnswer) {
   if (Array.isArray(answer.value)) return answer.value.join(", ");
@@ -144,7 +150,7 @@ export default function ReceiptPage() {
           <div className="mt-4 flex flex-wrap gap-2">
             {submission.registryTxDigest && (
               <a
-                href={suiTxUrl(submission.registryTxDigest)}
+                href={suiScanTxUrl(submission.registryTxDigest)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="btn btn-secondary px-3 py-1.5 text-xs"
@@ -155,7 +161,7 @@ export default function ReceiptPage() {
             )}
             {submission.suiFormObjectId && (
               <a
-                href={suiObjectUrl(submission.suiFormObjectId)}
+                href={suiScanObjectUrl(submission.suiFormObjectId)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="btn btn-secondary px-3 py-1.5 text-xs"
@@ -249,7 +255,7 @@ export default function ReceiptPage() {
                   ? `Form object ${submission.suiFormObjectId} links the public form to its Walrus schema.`
                   : "This response used a Walrus-only link, or local metadata for the Sui object is unavailable."
               }
-              href={submission.suiFormObjectId ? suiObjectUrl(submission.suiFormObjectId) : undefined}
+              href={submission.suiFormObjectId ? suiScanObjectUrl(submission.suiFormObjectId) : undefined}
             />
             <Step
               done={Boolean(submission.chainSubmissionId || submission.registryTxDigest)}
@@ -261,7 +267,7 @@ export default function ReceiptPage() {
                     ? "A registry transaction digest is available for this submission."
                     : "No Sui submission event metadata was found for this receipt."
               }
-              href={submission.registryTxDigest ? suiTxUrl(submission.registryTxDigest) : undefined}
+              href={submission.registryTxDigest ? suiScanTxUrl(submission.registryTxDigest) : undefined}
             />
             <Step
               done={Boolean(submission.reviewTxDigest)}
@@ -271,7 +277,7 @@ export default function ReceiptPage() {
                   ? `Latest review state: ${submission.status ?? "new"} / ${submission.priority ?? "medium"}.`
                   : `Current local review state: ${submission.status ?? "new"} / ${submission.priority ?? "medium"}.`
               }
-              href={submission.reviewTxDigest ? suiTxUrl(submission.reviewTxDigest) : undefined}
+              href={submission.reviewTxDigest ? suiScanTxUrl(submission.reviewTxDigest) : undefined}
             />
           </div>
         </div>
@@ -285,7 +291,7 @@ export default function ReceiptPage() {
               </div>
               {submission.suiFormObjectId && (
                 <a
-                  href={suiObjectUrl(submission.suiFormObjectId)}
+                  href={suiScanObjectUrl(submission.suiFormObjectId)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-sky-700 hover:text-sky-900"
@@ -308,7 +314,7 @@ export default function ReceiptPage() {
               </div>
               {submission.registryTxDigest && (
                 <a
-                  href={suiTxUrl(submission.registryTxDigest)}
+                  href={suiScanTxUrl(submission.registryTxDigest)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-sky-700 hover:text-sky-900"

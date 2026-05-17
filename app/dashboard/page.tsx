@@ -21,7 +21,14 @@ import {
 } from "@/lib/submissionRegistry";
 import { downloadFromWalrus, shortenBlobId, blobUrl } from "@/lib/walrus";
 import { createSignedSealSessionKey, formatDecryptedSealValue, sealDecryptValueWithSession } from "@/lib/seal";
-import { suiObjectUrl, suiTxUrl } from "@/lib/suiExplorer";
+// import { suiObjectUrl, suiTxUrl } from "@/lib/suiExplorer";
+import {
+  suiVisionObjectUrl,
+  suiVisionTxUrl,
+  suiScanObjectUrl,
+  suiScanTxUrl,
+} from "@/lib/suiExplorer";
+
 
 type Filter = "all" | "new" | "reviewing" | "done" | "high";
 
@@ -1100,7 +1107,7 @@ export default function DashboardPage() {
 	                            )}
 	                            {s.suiFormObjectId ? (
 	                              <a
-	                                href={suiObjectUrl(s.suiFormObjectId)}
+	                                href={suiScanObjectUrl(s.suiFormObjectId)}
 	                                target="_blank"
 	                                rel="noopener noreferrer"
 	                                className="inline-flex items-center gap-1.5 rounded-full border border-sky-100 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700 transition-colors hover:border-sky-200"
@@ -1120,7 +1127,7 @@ export default function DashboardPage() {
 	                            )}
 	                            {s.registryTxDigest && (
 	                              <a
-	                                href={suiTxUrl(s.registryTxDigest)}
+	                                href={suiScanTxUrl(s.registryTxDigest)}
 	                                target="_blank"
 	                                rel="noopener noreferrer"
 	                                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500 transition-colors hover:border-sky-200 hover:text-sky-700"
@@ -1131,7 +1138,7 @@ export default function DashboardPage() {
 	                            )}
 	                            {s.reviewTxDigest && (
 	                              <a
-	                                href={suiTxUrl(s.reviewTxDigest)}
+	                                href={suiScanTxUrl(s.reviewTxDigest)}
 	                                target="_blank"
 	                                rel="noopener noreferrer"
 	                                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500 transition-colors hover:border-sky-200 hover:text-sky-700"
