@@ -29,8 +29,11 @@ export interface FormSchema {
   fields: FormField[];
   sealEncrypted: boolean; // global Seal toggle
   createdAt: string; // ISO date
+  openAt?: string; // ISO date when public submissions open
+  closeAt?: string; // ISO date when public submissions close
   walrusBlobId?: string; // blob storing this schema
   suiFormObjectId?: string; // shared Sui object that points at the schema blob
+  suiPackageId?: string; // package that defines the shared form object type
   shareSlug: string; // URL-safe slug
   ownerAddress?: string; // admin wallet that created this form
 }
@@ -53,6 +56,7 @@ export interface FormSubmission {
   walrusBlobId: string; // blob storing this submission
   formWalrusBlobId?: string; // blob storing the public form schema used for this submission
   suiFormObjectId?: string;
+  suiPackageId?: string;
   formShareSlug?: string;
   encrypted: boolean;
   priority?: "low" | "medium" | "high";

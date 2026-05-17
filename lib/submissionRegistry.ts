@@ -14,6 +14,7 @@ export interface SubmissionRegistryEntry {
   timestamp: string;
   txDigest?: string;
   suiFormObjectId?: string;
+  suiPackageId?: string;
   chainSubmissionId?: string;
 }
 
@@ -26,6 +27,7 @@ export interface FormRegistryEntry {
   timestamp: string;
   txDigest?: string;
   suiFormObjectId?: string;
+  suiPackageId?: string;
 }
 
 export interface ReviewRegistryEntry {
@@ -229,13 +231,14 @@ export function buildUpdateFormObjectTx(entry: FormRegistryEntry & { suiFormObje
 
 export function buildSubmitFormObjectTx(entry: SubmissionRegistryEntry & { suiFormObjectId: string }) {
   const config = getRegistryConfig();
-  if (!config.packageId) {
+  const packageId = entry.suiPackageId || config.packageId;
+  if (!packageId) {
     throw new Error("Sui package is not configured.");
   }
 
   const tx = new Transaction();
   tx.moveCall({
-    target: `${config.packageId}::${config.module}::${config.submitFormObjectFunction}`,
+    target: `${packageId}::${config.module}::${config.submitFormObjectFunction}`,
     arguments: [
       tx.object(entry.suiFormObjectId),
       tx.pure.string(entry.submissionBlobId),
@@ -318,12 +321,14 @@ export async function loadFormSchemaFromSuiObject(client: any, objectId: string)
   });
   const content = response.data?.content;
   if (!content || content.dataType !== "moveObject") return null;
-  if (!String(content.type ?? "").endsWith("::submission_registry::FormObject")) return null;
+  const type = String(content.type ?? "");
+  if (!type.endsWith("::submission_registry::FormObject")) return null;
 
   const fields = content.fields ?? {};
   const formBlobId = moveString(fields.form_blob_id);
   const formId = moveString(fields.form_id);
   if (!formBlobId || !formId) return null;
+  const packageId = type.split("::")[0];
 
   return {
     formId,
@@ -333,6 +338,7 @@ export async function loadFormSchemaFromSuiObject(client: any, objectId: string)
     shareSlug: moveString(fields.share_slug) || "untitled-form",
     timestamp: new Date().toISOString(),
     suiFormObjectId: objectId,
+    suiPackageId: packageId,
   };
 }
 
@@ -367,6 +373,7 @@ export async function loadFormEntriesFromSui(client: any): Promise<FormRegistryE
         timestamp: json.timestamp ?? new Date(Number(event.timestampMs ?? Date.now())).toISOString(),
         txDigest: event.id?.txDigest,
         suiFormObjectId: json.formObjectId ?? json.form_object_id,
+        suiPackageId: String(event.type ?? "").split("::")[0],
       } satisfies FormRegistryEntry;
     })
     .filter(Boolean) as FormRegistryEntry[];
@@ -418,6 +425,7 @@ export async function loadSubmissionEntriesFromSui(client: any): Promise<Submiss
         timestamp: json.timestamp ?? new Date(Number(event.timestampMs ?? Date.now())).toISOString(),
         txDigest: event.id?.txDigest,
         suiFormObjectId: json.formObjectId ?? json.form_object_id,
+        suiPackageId: String(event.type ?? "").split("::")[0],
         chainSubmissionId:
           json.submissionId === undefined && json.submission_id === undefined
             ? undefined
@@ -500,6 +508,7 @@ export async function loadRegisteredSubmissions(client?: any): Promise<FormSubmi
       formOwnerAddress: value.submission.formOwnerAddress,
       registryTxDigest: value.submission.registryTxDigest ?? value.entry.txDigest,
       suiFormObjectId: value.submission.suiFormObjectId ?? value.entry.suiFormObjectId,
+      suiPackageId: value.submission.suiPackageId ?? value.entry.suiPackageId,
       chainSubmissionId: value.submission.chainSubmissionId ?? value.entry.chainSubmissionId,
       ...(value.entry.suiFormObjectId && value.entry.chainSubmissionId
         ? (() => {

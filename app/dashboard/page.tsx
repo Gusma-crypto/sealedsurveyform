@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { ConnectButton, useCurrentAccount, useSignAndExecuteTransaction, useSignPersonalMessage, useSuiClient } from "@mysten/dapp-kit";
-import { Check, Copy, Download, Database, Lock, LockOpen, RefreshCw, Loader2, ExternalLink, Wallet, Star } from "lucide-react";
+import { Check, ChevronDown, Copy, Download, Database, Lock, LockOpen, RefreshCw, Loader2, ExternalLink, Wallet, Star } from "lucide-react";
 import { checkSealKeyServerReachable, readableSealError, SealAnswerPreview } from "@/components/SealAnswerPreview";
 import type { FormSchema, FormSubmission } from "@/types";
-import { loadAllForms, loadAllSubmissions, submissionsToCSV } from "@/lib/forms";
+import { loadAllForms, loadAllSubmissions, loadPublicForm, submissionsToCSV } from "@/lib/forms";
 import { shortenAddress } from "@/lib/admin";
 import {
   buildSetSubmissionReviewTx,
@@ -83,8 +83,25 @@ function formSchemaFromRegistryEntry(entry: FormRegistryEntry): FormSchema {
     createdAt: entry.timestamp,
     walrusBlobId: entry.formBlobId,
     suiFormObjectId: entry.suiFormObjectId,
+    suiPackageId: entry.suiPackageId,
     shareSlug: entry.shareSlug,
     ownerAddress: entry.ownerAddress,
+  };
+}
+
+async function hydrateFormSchemaFromRegistryEntry(entry: FormRegistryEntry): Promise<FormSchema> {
+  const schema = await loadPublicForm(entry.formBlobId).catch(() => null);
+  return {
+    ...formSchemaFromRegistryEntry(entry),
+    ...(schema ?? {}),
+    id: entry.formId,
+    title: schema?.title ?? entry.formTitle,
+    fields: schema?.fields ?? [],
+    walrusBlobId: entry.formBlobId,
+    suiFormObjectId: entry.suiFormObjectId,
+    suiPackageId: entry.suiPackageId,
+    shareSlug: entry.shareSlug,
+    ownerAddress: entry.ownerAddress ?? schema?.ownerAddress,
   };
 }
 
@@ -102,6 +119,7 @@ function submissionFromRegistryEntry(
     walrusBlobId: entry.submissionBlobId,
     formWalrusBlobId: form?.formBlobId,
     suiFormObjectId: entry.suiFormObjectId,
+    suiPackageId: entry.suiPackageId,
     formShareSlug: form?.shareSlug,
     encrypted: entry.encrypted,
     priority: "low",
@@ -254,6 +272,10 @@ export default function DashboardPage() {
   const [decryptError, setDecryptError] = useState<string | null>(null);
   const [decryptedAnswers, setDecryptedAnswers] = useState<Record<string, string>>({});
   const autoDecryptAttempted = useRef<Set<string>>(new Set());
+  const sealSessionRef = useRef<{
+    address: string;
+    sessionKey: Awaited<ReturnType<typeof createSignedSealSessionKey>>;
+  } | null>(null);
   const address = account?.address.toLowerCase();
 
   const load = async () => {
@@ -282,10 +304,21 @@ export default function DashboardPage() {
         loadAllSubmissions().catch(() => []),
       ]);
       const data = dedupeSubmissions(registered.length > 0 ? registered : localSubmissions);
-      const registryFormSchemas = registeredForms.map(formSchemaFromRegistryEntry);
+      const registryFormSchemas = await Promise.all(
+        registeredForms.map(hydrateFormSchemaFromRegistryEntry)
+      );
       const formsById = new Map<string, FormSchema>();
       for (const form of localForms) formsById.set(form.id, form);
-      for (const form of registryFormSchemas) formsById.set(form.id, form);
+      for (const form of registryFormSchemas) {
+        const existing = formsById.get(form.id);
+        formsById.set(form.id, {
+          ...existing,
+          ...form,
+          fields: existing?.fields.length ? existing.fields : form.fields,
+          sealEncrypted: existing?.sealEncrypted ?? form.sealEncrypted,
+          description: existing?.description,
+        });
+      }
       setForms([...formsById.values()]);
       if (data.length === 0) {
         setSubmissions(DEMO_SUBMISSIONS);
@@ -307,6 +340,11 @@ export default function DashboardPage() {
   };
 
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    sealSessionRef.current = null;
+    autoDecryptAttempted.current.clear();
+  }, [account?.address]);
 
   const canViewSubmission = (submission: FormSubmission) => {
     if (!address) return false;
@@ -342,12 +380,9 @@ export default function DashboardPage() {
     return s.status === filter;
   });
   const selectedSubmission =
-    filtered.find((submission) => submissionIdentity(submission) === selectedSubmissionId) ??
-    filtered[0] ??
-    null;
-  const selectedSubmissionForm = selectedSubmission
-    ? forms.find((form) => form.id === selectedSubmission.formId)
-    : undefined;
+    selectedSubmissionId
+      ? filtered.find((submission) => submissionIdentity(submission) === selectedSubmissionId) ?? null
+      : null;
   const selectedEncryptedAnswers = selectedSubmission?.answers.filter((answer) => answer.encrypted && answer.encryption === "seal" && answer.sealId) ?? [];
   const selectedSubmissionIdentity = selectedSubmission ? submissionIdentity(selectedSubmission) : null;
 
@@ -399,6 +434,32 @@ export default function DashboardPage() {
   const answerDecryptKey = (submission: FormSubmission, answer: FormSubmission["answers"][number]) =>
     `${submissionIdentity(submission)}:${answer.fieldId}:${answer.sealId ?? ""}`;
 
+  const getSignedSealSessionKey = async () => {
+    if (!account) {
+      throw new Error("Connect the form owner wallet to decrypt responses.");
+    }
+
+    const cached = sealSessionRef.current;
+    if (
+      cached &&
+      cached.address.toLowerCase() === account.address.toLowerCase() &&
+      !cached.sessionKey.isExpired()
+    ) {
+      return cached.sessionKey;
+    }
+
+    const sessionKey = await createSignedSealSessionKey({
+      accountAddress: account.address,
+      signPersonalMessage,
+      suiClient,
+    });
+    sealSessionRef.current = {
+      address: account.address,
+      sessionKey,
+    };
+    return sessionKey;
+  };
+
   const decryptSelectedSubmission = async () => {
     if (!selectedSubmission || !account || selectedEncryptedAnswers.length === 0) return;
     setDecryptError(null);
@@ -410,11 +471,7 @@ export default function DashboardPage() {
       }
 
       await checkSealKeyServerReachable();
-      const sessionKey = await createSignedSealSessionKey({
-        accountAddress: account.address,
-        signPersonalMessage,
-        suiClient,
-      });
+      const sessionKey = await getSignedSealSessionKey();
 
       const next: Record<string, string> = {};
       for (const answer of selectedEncryptedAnswers) {
@@ -430,6 +487,9 @@ export default function DashboardPage() {
       }
       setDecryptedAnswers((current) => ({ ...current, ...next }));
     } catch (err) {
+      if (err instanceof Error && err.message.toLowerCase().includes("expired")) {
+        sealSessionRef.current = null;
+      }
       setDecryptError(readableSealError(err));
     } finally {
       setDecryptingSubmissionId(null);
@@ -519,6 +579,44 @@ export default function DashboardPage() {
   const fieldForAnswer = (submission: FormSubmission, fieldId: string) => {
     const form = forms.find((item) => item.id === submission.formId);
     return form?.fields.find((field) => field.id === fieldId);
+  };
+  const formForSubmission = (submission: FormSubmission) =>
+    forms.find((item) => item.id === submission.formId);
+  const detailRowsForSubmission = (submission: FormSubmission) => {
+    const form = formForSubmission(submission);
+    const emailField = form?.fields.find(
+      (field) => field.type === "email" || field.label.toLowerCase().includes("email")
+    );
+    const emailAnswer = emailField
+      ? submission.answers.find((answer) => answer.fieldId === emailField.id)
+      : submission.answers.find((answer) => fieldLabel(submission, answer.fieldId).toLowerCase().includes("email"));
+    const fieldRows = form?.fields.length
+      ? form.fields
+          .filter((field) => field.id !== emailField?.id)
+          .map((field) => ({
+            key: field.id,
+            label: field.label,
+            field,
+            answer: submission.answers.find((answer) => answer.fieldId === field.id),
+          }))
+      : submission.answers
+          .filter((answer) => answer.fieldId !== emailAnswer?.fieldId)
+          .map((answer) => ({
+            key: answer.fieldId,
+            label: fieldLabel(submission, answer.fieldId),
+            field: fieldForAnswer(submission, answer.fieldId),
+            answer,
+          }));
+
+    return {
+      email: {
+        key: "email",
+        label: "email",
+        field: emailField ?? (emailAnswer ? fieldForAnswer(submission, emailAnswer.fieldId) : undefined),
+        answer: emailAnswer,
+      },
+      fields: fieldRows,
+    };
   };
 
   if (!account) {
@@ -765,23 +863,27 @@ export default function DashboardPage() {
                 <th className="text-left px-4 py-3 font-medium text-xs text-slate-400">Form</th>
                 <th className="text-left px-4 py-3 font-medium text-xs text-slate-400">Priority</th>
                 <th className="text-left px-4 py-3 font-medium text-xs text-slate-400">Status</th>
-                <th className="text-left px-4 py-3 font-medium text-xs text-slate-400">Enc</th>
-                <th className="text-left px-4 py-3 font-medium text-xs text-slate-400">Walrus blob</th>
-                <th className="text-left px-4 py-3 font-medium text-xs text-slate-400">Date</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((s) => (
-                <tr
-                  key={submissionIdentity(s)}
-                  onClick={() => setSelectedSubmissionId(submissionIdentity(s))}
-                  className={`cursor-pointer border-b border-slate-100/80 transition-colors hover:bg-slate-50/80 ${
-                    selectedSubmission && submissionIdentity(selectedSubmission) === submissionIdentity(s) ? "bg-sky-50/50" : ""
-                  }`}
-                >
-                  <td className="px-4 py-3 text-slate-800 font-medium">
-                    <div className="flex flex-col gap-1">
-                      <span>{answerValuePreview(s.answers[0] ?? { fieldId: "", value: null }).slice(0, 64)}</span>
+	                <th className="text-left px-4 py-3 font-medium text-xs text-slate-400">Enc</th>
+	                <th className="text-left px-4 py-3 font-medium text-xs text-slate-400">Walrus blob</th>
+	                <th className="text-left px-4 py-3 font-medium text-xs text-slate-400">Date</th>
+	                <th className="text-right px-4 py-3 font-medium text-xs text-slate-400">Detail</th>
+	              </tr>
+	            </thead>
+	            <tbody>
+	              {filtered.map((s) => {
+	                const identity = submissionIdentity(s);
+	                const expanded = selectedSubmissionId === identity;
+	                const detailRows = detailRowsForSubmission(s);
+	                return (
+	                <Fragment key={identity}>
+	                <tr
+	                  className={`border-b border-slate-100/80 transition-colors hover:bg-slate-50/80 ${
+	                    expanded ? "bg-sky-50/50" : ""
+	                  }`}
+	                >
+	                  <td className="px-4 py-3 text-slate-800 font-medium">
+	                    <div className="flex flex-col gap-1">
+	                      <span>{answerValuePreview(s.answers[0] ?? { fieldId: "", value: null }).slice(0, 64)}</span>
                       <span className="text-xs font-normal text-slate-400">{s.answers.length} answer{s.answers.length === 1 ? "" : "s"}</span>
                     </div>
                   </td>
@@ -857,168 +959,157 @@ export default function DashboardPage() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-slate-400 text-xs">
-                    {new Date(s.submittedAt).toLocaleDateString("id-ID", {
-                      day: "numeric", month: "short", year: "numeric",
-                    })}
-                  </td>
-                </tr>
-              ))}
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-slate-400 text-sm">
-                    No detailed reports available for this wallet.
-                  </td>
-                </tr>
+	                    {new Date(s.submittedAt).toLocaleDateString("id-ID", {
+	                      day: "numeric", month: "short", year: "numeric",
+	                    })}
+	                  </td>
+	                  <td className="px-4 py-3 text-right">
+	                    <button
+	                      type="button"
+	                      onClick={() => setSelectedSubmissionId(expanded ? null : identity)}
+	                      className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition-colors hover:border-sky-200 hover:text-sky-700"
+	                    >
+	                      <ChevronDown size={12} className={`transition-transform ${expanded ? "rotate-180" : ""}`} />
+	                      {expanded ? "Collapse" : "Detail"}
+	                    </button>
+	                  </td>
+	                </tr>
+	                {expanded && (
+	                  <tr className="border-b border-slate-100 bg-white">
+	                    <td colSpan={8} className="px-4 py-4">
+	                      <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-4">
+	                        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+	                          <div>
+	                            <h3 className="text-sm font-semibold text-slate-900">Submission detail</h3>
+	                            <p className="mt-1 text-xs text-slate-400">
+	                              {s.formTitle} · {new Date(s.submittedAt).toLocaleString("id-ID")}
+	                            </p>
+	                          </div>
+	                          <div className="flex flex-wrap gap-2">
+	                            {s.answers.some((answer) => answer.encrypted && answer.encryption === "seal" && answer.sealId) && (
+	                              <button
+	                                type="button"
+	                                onClick={decryptSelectedSubmission}
+	                                disabled={decryptingSubmissionId === identity}
+	                                className="inline-flex items-center gap-1.5 rounded-full border border-sky-100 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700 transition-colors hover:border-sky-200 disabled:cursor-not-allowed disabled:opacity-60"
+	                              >
+	                                {decryptingSubmissionId === identity ? (
+	                                  <Loader2 size={12} className="animate-spin" />
+	                                ) : (
+	                                  <LockOpen size={12} />
+	                                )}
+	                                {decryptingSubmissionId === identity ? "Decrypting" : "Decrypt all"}
+	                              </button>
+	                            )}
+	                            {s.suiFormObjectId ? (
+	                              <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-100 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
+	                                Sui object {shortObjectId(s.suiFormObjectId)}
+	                              </span>
+	                            ) : (
+	                              <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-100 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
+	                                Walrus-only
+	                              </span>
+	                            )}
+	                            {s.chainSubmissionId && (
+	                              <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500">
+	                                Submission #{s.chainSubmissionId}
+	                              </span>
+	                            )}
+	                          </div>
+	                        </div>
+	                        {decryptError && selectedSubmissionId === identity && (
+	                          <div className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
+	                            {decryptError}
+	                          </div>
+	                        )}
+	                        <div className="divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white">
+	                          <div className="grid gap-2 px-4 py-3 sm:grid-cols-[180px_1fr]">
+	                            <div className="text-xs font-medium uppercase text-slate-400">wallet</div>
+	                            <div className="break-all font-mono text-xs text-slate-700">{s.submitterAddress ?? "-"}</div>
+	                          </div>
+	                          <div className="grid gap-2 px-4 py-3 sm:grid-cols-[180px_1fr]">
+	                            <div className="text-xs font-medium uppercase text-slate-400">email</div>
+	                            <div className="text-sm text-slate-700">
+	                              {detailRows.email.answer ? (
+	                                <DetailAnswerValue
+	                                  answer={detailRows.email.answer}
+	                                  submission={s}
+	                                  field={detailRows.email.field}
+	                                  decryptedValue={decryptedAnswers[answerDecryptKey(s, detailRows.email.answer)]}
+	                                />
+	                              ) : (
+	                                <span className="text-slate-400">-</span>
+	                              )}
+	                            </div>
+	                          </div>
+	                          {detailRows.fields.map(({ key, label, field, answer }) => (
+	                            <div key={key} className="grid gap-2 px-4 py-3 sm:grid-cols-[180px_1fr]">
+	                              <div className="flex flex-wrap items-center gap-1.5 text-xs font-medium uppercase text-slate-400">
+	                                <span>{label}</span>
+	                                {field?.type && (
+	                                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-normal normal-case text-slate-400">
+	                                    {field.type}
+	                                  </span>
+	                                )}
+	                                {answer?.encrypted && (
+	                                  <span className="inline-flex items-center gap-1 rounded-full border border-sky-100 bg-sky-50 px-2 py-0.5 text-[10px] font-medium normal-case text-sky-700">
+	                                    <Lock size={9} /> Seal
+	                                  </span>
+	                                )}
+	                              </div>
+	                              <div className="space-y-2 text-sm text-slate-700">
+	                                {answer ? (
+	                                  <>
+	                                    <DetailAnswerValue
+	                                      answer={answer}
+	                                      submission={s}
+	                                      field={field}
+	                                      decryptedValue={decryptedAnswers[answerDecryptKey(s, answer)]}
+	                                    />
+	                                    {answer.fileBlobId && (
+	                                      <a
+	                                        href={blobUrl(answer.fileBlobId)}
+	                                        target="_blank"
+	                                        rel="noopener noreferrer"
+	                                        className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-700 hover:text-sky-900"
+	                                      >
+	                                        <ExternalLink size={12} />
+	                                        Media {shortenBlobId(answer.fileBlobId)}
+	                                      </a>
+	                                    )}
+	                                  </>
+	                                ) : (
+	                                  <span className="text-slate-400">-</span>
+	                                )}
+	                              </div>
+	                            </div>
+	                          ))}
+	                          {s.answers.length === 0 && (
+	                            <div className="px-4 py-6 text-center text-sm text-slate-400">
+	                              No answers in this submission.
+	                            </div>
+	                          )}
+	                        </div>
+	                      </div>
+	                    </td>
+	                  </tr>
+	                )}
+	                </Fragment>
+	                );
+	              })}
+	              {filtered.length === 0 && (
+	                <tr>
+	                  <td colSpan={8} className="px-4 py-10 text-center text-slate-400 text-sm">
+	                    No detailed reports available for this wallet.
+	                  </td>
+	                </tr>
               )}
             </tbody>
           </table>
           </div>
         )}
       </div>
-      {selectedSubmission && (
-        <div className="mt-4 panel overflow-hidden">
-          <div className="border-b border-slate-100 bg-slate-50/80 px-4 py-3">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h2 className="text-sm font-semibold text-slate-900">Submission detail</h2>
-                <p className="mt-1 text-xs text-slate-400">
-                  {selectedSubmission.formTitle} · {new Date(selectedSubmission.submittedAt).toLocaleString("id-ID")}
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {selectedEncryptedAnswers.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={decryptSelectedSubmission}
-                    disabled={decryptingSubmissionId === submissionIdentity(selectedSubmission)}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-sky-100 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700 transition-colors hover:border-sky-200 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {decryptingSubmissionId === submissionIdentity(selectedSubmission) ? (
-                      <Loader2 size={12} className="animate-spin" />
-                    ) : (
-                      <LockOpen size={12} />
-                    )}
-                    {decryptingSubmissionId === submissionIdentity(selectedSubmission)
-                      ? "Decrypting"
-                      : "Decrypt all"}
-                  </button>
-                )}
-                {selectedSubmission.suiFormObjectId ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-100 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
-                    Sui object {shortObjectId(selectedSubmission.suiFormObjectId)}
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-100 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
-                    Walrus-only
-                  </span>
-                )}
-                {selectedSubmission.chainSubmissionId && (
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500">
-                    Submission #{selectedSubmission.chainSubmissionId}
-                  </span>
-                )}
-              </div>
-            </div>
-            {decryptError && (
-              <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
-                {decryptError}
-              </div>
-            )}
-          </div>
-
-          <div className="grid gap-4 p-4 lg:grid-cols-[1fr_260px]">
-            <div className="space-y-3">
-              {selectedSubmission.answers.map((answer, index) => (
-                <div key={`${answer.fieldId}-${index}`} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                  <div className="mb-2 flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium text-slate-800">
-                      {fieldLabel(selectedSubmission, answer.fieldId)}
-                    </span>
-                    {fieldForAnswer(selectedSubmission, answer.fieldId)?.type && (
-                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-500">
-                        {fieldForAnswer(selectedSubmission, answer.fieldId)?.type}
-                      </span>
-                    )}
-                    {answer.encrypted && (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-sky-100 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700">
-                        <Lock size={10} /> Seal
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-sm leading-6 text-slate-600">
-                    <DetailAnswerValue
-                      answer={answer}
-                      submission={selectedSubmission}
-                      field={fieldForAnswer(selectedSubmission, answer.fieldId)}
-                      decryptedValue={decryptedAnswers[answerDecryptKey(selectedSubmission, answer)]}
-                    />
-                  </div>
-                  {answer.fileBlobId && (
-                    <a
-                      href={blobUrl(answer.fileBlobId)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-sky-700 hover:text-sky-900"
-                    >
-                      <ExternalLink size={12} />
-                      Open media blob {shortenBlobId(answer.fileBlobId)}
-                    </a>
-                  )}
-                </div>
-              ))}
-              {selectedSubmission.answers.length === 0 && (
-                <div className="rounded-lg border border-slate-200 bg-white p-6 text-center text-sm text-slate-400">
-                  No answers in this submission.
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
-              <div>
-                <div className="mb-1 font-medium text-slate-700">Submitter</div>
-                <div className="break-all font-mono">{selectedSubmission.submitterAddress ?? "-"}</div>
-              </div>
-              <div>
-                <div className="mb-1 font-medium text-slate-700">Walrus submission</div>
-                <a
-                  href={blobUrl(selectedSubmission.walrusBlobId)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-sky-700 hover:text-sky-900"
-                >
-                  {shortenBlobId(selectedSubmission.walrusBlobId)}
-                  <ExternalLink size={10} />
-                </a>
-              </div>
-              {selectedSubmission.formWalrusBlobId && (
-                <div>
-                  <div className="mb-1 font-medium text-slate-700">Form schema blob</div>
-                  <a
-                    href={blobUrl(selectedSubmission.formWalrusBlobId)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-sky-700 hover:text-sky-900"
-                  >
-                    {shortenBlobId(selectedSubmission.formWalrusBlobId)}
-                    <ExternalLink size={10} />
-                  </a>
-                </div>
-              )}
-              <div>
-                <div className="mb-1 font-medium text-slate-700">Review state</div>
-                <div className="capitalize">{selectedSubmission.status ?? "new"} · {selectedSubmission.priority ?? "medium"}</div>
-              </div>
-              {selectedSubmission.reviewTxDigest && (
-                <div>
-                  <div className="mb-1 font-medium text-slate-700">Last review tx</div>
-                  <div className="break-all font-mono">{selectedSubmission.reviewTxDigest}</div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-      </>
+	      </>
       )}
     </div>
   );

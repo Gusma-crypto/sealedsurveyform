@@ -19,7 +19,7 @@ export default function RootLayout({
       <body>
         <AppProviders>
           <Navbar />
-          <main className="min-h-screen">{children}</main>
+          <main className="min-h-screen" data-app-shell>{children}</main>
         </AppProviders>
       </body>
     </html>

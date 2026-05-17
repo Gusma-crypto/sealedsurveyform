@@ -18,17 +18,14 @@ import { loadPublicForm, saveSubmission } from "@/lib/forms";
 import { createWalletWalrusSigner, uploadFileToWalrus } from "@/lib/walrus";
 import { createSealIdentity, isSealConfigured, sealEncryptValue } from "@/lib/seal";
 import {
-  appendRegisterSubmissionCall,
   buildRegisterSubmissionTx,
   buildSubmitFormObjectTx,
   findSubmissionEventId,
-  getRegistryConfig,
   isSuiRegistryConfigured,
   loadFormSchemaFromSuiObject,
   recordLocalSubmissionEntry,
   type SubmissionRegistryEntry,
 } from "@/lib/submissionRegistry";
-import { Transaction } from "@mysten/sui/transactions";
 
 type Answers = Record<string, string | string[] | number | null>;
 type Files = Record<string, File | null>;
@@ -39,6 +36,11 @@ type SubmitState =
   | { status: "draft"; message: string };
 
 const SUBMISSION_DRAFT_PREFIX = "sealedsurvey:submission-draft:";
+const WALRUS_MAX_BLOB_SIZE_BYTES = 14_273_391_930; // Current Walrus maximum blob size is about 13.3 GiB.
+const DEFAULT_IMAGE_UPLOAD_LIMIT_BYTES = 15 * 1024 * 1024;
+const DEFAULT_VIDEO_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024;
+const IMAGE_UPLOAD_LIMIT_BYTES = Number(process.env.NEXT_PUBLIC_MAX_IMAGE_UPLOAD_BYTES || DEFAULT_IMAGE_UPLOAD_LIMIT_BYTES);
+const VIDEO_UPLOAD_LIMIT_BYTES = Number(process.env.NEXT_PUBLIC_MAX_VIDEO_UPLOAD_BYTES || DEFAULT_VIDEO_UPLOAD_LIMIT_BYTES);
 
 type SubmissionDraft = {
   formId: string;
@@ -63,6 +65,81 @@ function isValidEmail(value: string | string[] | number | null) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
 
+function formatBytes(bytes: number) {
+  const units = ["B", "KiB", "MiB", "GiB"];
+  let size = bytes;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
+}
+
+function mediaLimitForField(field: FormField) {
+  if (field.type === "screenshot") return Math.min(IMAGE_UPLOAD_LIMIT_BYTES, WALRUS_MAX_BLOB_SIZE_BYTES);
+  if (field.type === "video") return Math.min(VIDEO_UPLOAD_LIMIT_BYTES, WALRUS_MAX_BLOB_SIZE_BYTES);
+  return WALRUS_MAX_BLOB_SIZE_BYTES;
+}
+
+function validateMediaFile(field: FormField, file: File) {
+  const limit = mediaLimitForField(field);
+  if (file.size > limit) {
+    throw new Error(
+      `${field.label || "Media file"} is ${formatBytes(file.size)}. Maximum allowed ${field.type === "screenshot" ? "image" : "video"} upload is ${formatBytes(limit)}.`
+    );
+  }
+  if (file.size > WALRUS_MAX_BLOB_SIZE_BYTES) {
+    throw new Error(`Walrus blob limit is ${formatBytes(WALRUS_MAX_BLOB_SIZE_BYTES)} per file.`);
+  }
+  if (field.type === "screenshot" && file.type && !file.type.startsWith("image/")) {
+    throw new Error(`${field.label || "Screenshot"} must be an image file.`);
+  }
+  if (field.type === "video" && file.type && !file.type.startsWith("video/")) {
+    throw new Error(`${field.label || "Video"} must be a video file.`);
+  }
+}
+
+function formatScheduleDate(value?: string) {
+  if (!value) return "-";
+  return new Date(value).toLocaleString("id-ID", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function getFormAvailability(form: FormSchema) {
+  const now = Date.now();
+  const openTime = form.openAt ? new Date(form.openAt).getTime() : null;
+  const closeTime = form.closeAt ? new Date(form.closeAt).getTime() : null;
+  if (openTime && now < openTime) {
+    return {
+      canSubmit: false,
+      state: "not-open" as const,
+      message: `This form opens on ${formatScheduleDate(form.openAt)}.`,
+    };
+  }
+  if (closeTime && now > closeTime) {
+    return {
+      canSubmit: false,
+      state: "closed" as const,
+      message: `This form closed on ${formatScheduleDate(form.closeAt)}.`,
+    };
+  }
+  return {
+    canSubmit: true,
+    state: "open" as const,
+    message: form.closeAt
+      ? `Last submission: ${formatScheduleDate(form.closeAt)}.`
+      : form.openAt
+        ? `Open since ${formatScheduleDate(form.openAt)}.`
+        : "This form is open for submissions.",
+  };
+}
+
 function inferPriority(answers: FieldAnswer[]): FormSubmission["priority"] {
   const combined = answers
     .flatMap((answer) => Array.isArray(answer.value) ? answer.value : [answer.value])
@@ -83,26 +160,6 @@ function extractSuiFormObjectId(identifier: string) {
   const decoded = decodeURIComponent(identifier);
   const source = decoded.includes("--") ? decoded.slice(decoded.lastIndexOf("--") + 2) : decoded;
   return /^0x[a-fA-F0-9]+$/.test(source) ? source : null;
-}
-
-function buildSubmissionChainTx(entry: SubmissionRegistryEntry & { suiFormObjectId: string }) {
-  const config = getRegistryConfig();
-  if (!config.packageId) {
-    throw new Error("Sui package is not configured.");
-  }
-
-  const tx = new Transaction();
-  tx.moveCall({
-    target: `${config.packageId}::${config.module}::${config.submitFormObjectFunction}`,
-    arguments: [
-      tx.object(entry.suiFormObjectId),
-      tx.pure.string(entry.submissionBlobId),
-      tx.pure.bool(entry.encrypted),
-      tx.pure.string(entry.timestamp),
-    ],
-  });
-  appendRegisterSubmissionCall(tx, entry);
-  return tx;
 }
 
 function saveSubmissionDraft(form: FormSchema, answers: Answers, files: Files) {
@@ -230,17 +287,34 @@ function FieldControl({
   }
 
   if (field.type === "screenshot" || field.type === "video") {
+    const limit = mediaLimitForField(field);
     return (
       <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500 transition-colors hover:border-slate-300 hover:bg-white">
         <span className="flex items-center gap-2">
           <FileUp size={16} />
-          {file ? file.name : `Upload ${field.type === "screenshot" ? "image" : "video"}`}
+          <span className="flex flex-col">
+            <span>{file ? file.name : `Upload ${field.type === "screenshot" ? "image" : "video"}`}</span>
+            <span className="text-xs text-slate-400">Max {formatBytes(limit)}</span>
+          </span>
         </span>
         <span className="text-xs text-slate-400">Walrus blob</span>
         <input
           type="file"
           accept={field.type === "screenshot" ? "image/*" : "video/*"}
-          onChange={(event) => onFileChange(event.target.files?.[0] ?? null)}
+          onChange={(event) => {
+            const nextFile = event.target.files?.[0] ?? null;
+            if (nextFile) {
+              try {
+                validateMediaFile(field, nextFile);
+              } catch (err) {
+                event.target.value = "";
+                onFileChange(null);
+                window.alert(err instanceof Error ? err.message : "Invalid media file.");
+                return;
+              }
+            }
+            onFileChange(nextFile);
+          }}
           className="hidden"
         />
       </label>
@@ -298,6 +372,7 @@ export default function PublicFormPage() {
               ...loaded,
               walrusBlobId: formObject.formBlobId,
               suiFormObjectId: formObject.suiFormObjectId,
+              suiPackageId: formObject.suiPackageId,
               ownerAddress: formObject.ownerAddress ?? loaded.ownerAddress,
               shareSlug: formObject.shareSlug || loaded.shareSlug,
             }
@@ -345,12 +420,21 @@ export default function PublicFormPage() {
       return !isValidEmail(value);
     });
   }, [answers, form]);
+  const availability = form ? getFormAvailability(form) : null;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!form) return;
 
     setTouchedSubmit(true);
+    const currentAvailability = getFormAvailability(form);
+    if (!currentAvailability.canSubmit) {
+      setSubmitState({
+        status: "error",
+        message: currentAvailability.message,
+      });
+      return;
+    }
     if (missingRequired.length > 0 || invalidEmailFields.length > 0) return;
 
     if (!account) {
@@ -377,12 +461,7 @@ export default function PublicFormPage() {
         const shouldEncrypt = form.sealEncrypted || field.encrypted;
         const sealId = createSealIdentity(form.id, submissionId, field.id);
         if (selectedFile) {
-          if (shouldEncrypt) {
-            throw new Error(
-              "Seal encryption for screenshot/video uploads is not enabled yet. Turn off encryption for this media field or submit text/private answers only."
-            );
-          }
-
+          validateMediaFile(field, selectedFile);
           const uploaded = await uploadFileToWalrus(selectedFile, { signer: walrusSigner });
           normalizedAnswers.push({
             fieldId: field.id,
@@ -429,6 +508,7 @@ export default function PublicFormPage() {
         walrusBlobId: "",
         formWalrusBlobId: form.walrusBlobId,
         suiFormObjectId: form.suiFormObjectId,
+        suiPackageId: form.suiPackageId,
         formShareSlug: form.shareSlug,
         encrypted: form.sealEncrypted || form.fields.some((field) => field.encrypted),
         priority: inferPriority(normalizedAnswers),
@@ -446,10 +526,11 @@ export default function PublicFormPage() {
         encrypted: submission.encrypted,
         timestamp: submission.submittedAt,
         suiFormObjectId: form.suiFormObjectId,
+        suiPackageId: form.suiPackageId,
       };
 
       if (form.suiFormObjectId) {
-        const tx = buildSubmissionChainTx({
+        const tx = buildSubmitFormObjectTx({
           ...registryEntry,
           suiFormObjectId: form.suiFormObjectId,
         });
@@ -516,6 +597,27 @@ export default function PublicFormPage() {
         {form.description && (
           <p className="mt-2 text-sm leading-6 text-slate-500">{form.description}</p>
         )}
+        {availability && (
+          <div className={`mt-4 rounded-lg border px-4 py-3 text-sm shadow-sm ${
+            availability.canSubmit
+              ? "border-sky-100 bg-sky-50 text-sky-800"
+              : "border-amber-100 bg-amber-50 text-amber-800"
+          }`}>
+            <div className="font-medium">
+              {availability.state === "closed"
+                ? "Form closed"
+                : availability.state === "not-open"
+                  ? "Form not open yet"
+                  : "Form open"}
+            </div>
+            <div className="mt-1 text-xs leading-5">{availability.message}</div>
+            {(form.openAt || form.closeAt) && (
+              <div className="mt-2 text-xs leading-5">
+                Opens {formatScheduleDate(form.openAt)} · Closes {formatScheduleDate(form.closeAt)}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <form onSubmit={handleSubmit} className="panel overflow-hidden">
@@ -575,13 +677,21 @@ export default function PublicFormPage() {
           <p className="text-xs leading-5 text-slate-500">
             Submissions are stored as Walrus blobs. Seal encryption wiring is prepared for the next integration step.
           </p>
-          <button type="submit" disabled={submitState.status === "submitting"} className="btn btn-primary shrink-0">
+          <button
+            type="submit"
+            disabled={submitState.status === "submitting" || availability?.canSubmit === false}
+            className="btn btn-primary shrink-0"
+          >
             {submitState.status === "submitting" ? (
               <Loader2 size={15} className="animate-spin" />
             ) : (
               <Send size={15} />
             )}
-            {submitState.status === "submitting" ? "Submitting..." : "Submit response"}
+            {submitState.status === "submitting"
+              ? "Submitting..."
+              : availability?.canSubmit === false
+                ? "Submissions closed"
+                : "Submit response"}
           </button>
         </div>
       </form>
