@@ -12,11 +12,15 @@ const EFormNotFound: u64 = 0;
 const ENotFormOwner: u64 = 1;
 const EDuplicateWallet: u64 = 2;
 const EDuplicateEmail: u64 = 3;
+const ENotRegistryOwner: u64 = 4;
+
+const DEFAULT_ADMIN: address = @0xc4d6ee019649edba41d5a5ed1081fe3c86afc41fea413195dd6ecdd0f6090e54;
 
 public struct Registry has key {
     id: UID,
     owner: address,
     forms: Table<String, FormRecord>,
+    admins: Table<address, bool>,
 }
 
 public struct FormObject has key {
@@ -89,7 +93,20 @@ public struct SubmissionReviewUpdated has copy, drop {
     submission_id: u64,
     status: u8,
     priority: u8,
+    reviewer: address,
     timestamp: String,
+}
+
+public struct RegistryAdminUpdated has copy, drop {
+    admin: address,
+    enabled: bool,
+    updated_by: address,
+    timestamp: String,
+}
+
+fun is_registry_admin(registry: &Registry, account: address): bool {
+    registry.owner == account ||
+        (table::contains(&registry.admins, account) && *table::borrow(&registry.admins, account))
 }
 
 public fun seal_approve(_id: vector<u8>, registry: &Registry, form_id: String, ctx: &TxContext) {
@@ -104,10 +121,42 @@ public fun seal_approve(_id: vector<u8>, registry: &Registry, form_id: String, c
 }
 
 fun init(ctx: &mut TxContext) {
+    let owner = tx_context::sender(ctx);
+    let mut admins = table::new<address, bool>(ctx);
+    table::add(&mut admins, owner, true);
+    if (owner != DEFAULT_ADMIN) {
+        table::add(&mut admins, DEFAULT_ADMIN, true);
+    };
+
     transfer::share_object(Registry {
         id: object::new(ctx),
-        owner: tx_context::sender(ctx),
+        owner,
         forms: table::new<String, FormRecord>(ctx),
+        admins,
+    });
+}
+
+public fun set_admin(
+    registry: &mut Registry,
+    admin: address,
+    enabled: bool,
+    timestamp: String,
+    ctx: &TxContext,
+) {
+    let sender = tx_context::sender(ctx);
+    assert!(registry.owner == sender, ENotRegistryOwner);
+
+    if (table::contains(&registry.admins, admin)) {
+        *table::borrow_mut(&mut registry.admins, admin) = enabled;
+    } else {
+        table::add(&mut registry.admins, admin, enabled);
+    };
+
+    event::emit(RegistryAdminUpdated {
+        admin,
+        enabled,
+        updated_by: sender,
+        timestamp,
     });
 }
 
@@ -249,6 +298,7 @@ public  fun submit_to_form_object(
 }
 
 public  fun set_submission_review(
+    registry: &Registry,
     form: &FormObject,
     submission_id: u64,
     status: u8,
@@ -256,7 +306,8 @@ public  fun set_submission_review(
     timestamp: String,
     ctx: &TxContext,
 ) {
-    assert!(form.owner == tx_context::sender(ctx), ENotFormOwner);
+    let sender = tx_context::sender(ctx);
+    assert!(form.owner == sender || is_registry_admin(registry, sender), ENotFormOwner);
 
     event::emit(SubmissionReviewUpdated {
         form_object_id: object::id(form),
@@ -264,6 +315,7 @@ public  fun set_submission_review(
         submission_id,
         status,
         priority,
+        reviewer: sender,
         timestamp,
     });
 }

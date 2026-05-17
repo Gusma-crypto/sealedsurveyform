@@ -80,6 +80,8 @@ export function getRegistryConfig() {
       process.env.NEXT_PUBLIC_SUI_SUBMIT_FORM_OBJECT_FUNCTION || "submit_to_form_object",
     reviewFunction:
       process.env.NEXT_PUBLIC_SUI_REVIEW_FUNCTION || "set_submission_review",
+    setAdminFunction:
+      process.env.NEXT_PUBLIC_SUI_SET_ADMIN_FUNCTION || "set_admin",
   };
 }
 
@@ -258,8 +260,8 @@ export function buildSubmitFormObjectTx(entry: SubmissionRegistryEntry & { suiFo
 
 export function buildSetSubmissionReviewTx(entry: ReviewRegistryEntry) {
   const config = getRegistryConfig();
-  if (!config.packageId) {
-    throw new Error("Sui package is not configured.");
+  if (!config.packageId || !config.registryObjectId) {
+    throw new Error("Sui registry is not configured.");
   }
 
   const statusCode: Record<NonNullable<FormSubmission["status"]>, number> = {
@@ -277,10 +279,34 @@ export function buildSetSubmissionReviewTx(entry: ReviewRegistryEntry) {
   tx.moveCall({
     target: `${config.packageId}::${config.module}::${config.reviewFunction}`,
     arguments: [
+      tx.object(config.registryObjectId),
       tx.object(entry.suiFormObjectId),
       tx.pure.u64(entry.chainSubmissionId),
       tx.pure.u8(statusCode[entry.status ?? "new"]),
       tx.pure.u8(priorityCode[entry.priority ?? "medium"]),
+      tx.pure.string(entry.timestamp),
+    ],
+  });
+  return tx;
+}
+
+export function buildSetRegistryAdminTx(entry: {
+  adminAddress: string;
+  enabled: boolean;
+  timestamp: string;
+}) {
+  const config = getRegistryConfig();
+  if (!config.packageId || !config.registryObjectId) {
+    throw new Error("Sui registry is not configured.");
+  }
+
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${config.packageId}::${config.module}::${config.setAdminFunction}`,
+    arguments: [
+      tx.object(config.registryObjectId),
+      tx.pure.address(entry.adminAddress),
+      tx.pure.bool(entry.enabled),
       tx.pure.string(entry.timestamp),
     ],
   });

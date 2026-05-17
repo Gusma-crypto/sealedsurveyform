@@ -6,7 +6,7 @@ import { AlertCircle, Check, ChevronDown, Copy, Download, Database, Lock, LockOp
 import { checkSealKeyServerReachable, readableSealError, SealAnswerPreview } from "@/components/SealAnswerPreview";
 import type { FormSchema, FormSubmission } from "@/types";
 import { loadAllForms, loadAllSubmissions, loadPublicForm } from "@/lib/forms";
-import { shortenAddress } from "@/lib/admin";
+import { isAdminAddress, shortenAddress } from "@/lib/admin";
 import {
   buildSetSubmissionReviewTx,
   isSuiRegistryConfigured,
@@ -422,6 +422,7 @@ export default function DashboardPage() {
     sessionKey: Awaited<ReturnType<typeof createSignedSealSessionKey>>;
   } | null>(null);
   const address = account?.address.toLowerCase();
+  const isConfiguredAdmin = isAdminAddress(account?.address);
 
   const load = async () => {
     setLoading(true);
@@ -512,19 +513,25 @@ export default function DashboardPage() {
 
   const canViewSubmission = (submission: FormSubmission) => {
     if (!address) return false;
+    if (isConfiguredAdmin) return true;
     if (submission.formOwnerAddress) {
       return submission.formOwnerAddress.toLowerCase() === address;
     }
     return false;
   };
 
+  const canDecryptSubmission = (submission: FormSubmission) => {
+    if (!address) return false;
+    return Boolean(submission.formOwnerAddress && submission.formOwnerAddress.toLowerCase() === address);
+  };
+
   const visibleSubmissions = submissions.filter(canViewSubmission);
   const mySubmissions = submissions.filter(
     (submission) => submission.submitterAddress?.toLowerCase() === address
   );
-  const ownedForms = forms.filter(
-    (form) => form.ownerAddress?.toLowerCase() === address
-  );
+  const ownedForms = isConfiguredAdmin
+    ? forms
+    : forms.filter((form) => form.ownerAddress?.toLowerCase() === address);
   const hasOwnedForms = ownedForms.length > 0 || visibleSubmissions.length > 0;
 
   const selectedForm = selectedFormId
@@ -593,9 +600,19 @@ export default function DashboardPage() {
     submission: FormSubmission,
     patch: Pick<FormSubmission, "status" | "priority">
   ) => {
-    if (!submission.suiFormObjectId || !submission.chainSubmissionId) return;
     const nextStatus = patch.status ?? submission.status ?? "new";
     const nextPriority = patch.priority ?? submission.priority ?? "medium";
+    if (!submission.suiFormObjectId || !submission.chainSubmissionId) {
+      setSubmissions((current) =>
+        current.map((item) =>
+          submissionIdentity(item) === submissionIdentity(submission)
+            ? { ...item, status: nextStatus, priority: nextPriority }
+            : item
+        )
+      );
+      return;
+    }
+
     setUpdatingReviewId(submission.id);
     setReviewError(null);
     try {
@@ -822,9 +839,7 @@ export default function DashboardPage() {
     if (!account) return;
     const decryptable = items
       .filter((submission) => {
-        if (submission.formOwnerAddress && submission.formOwnerAddress.toLowerCase() !== account.address.toLowerCase()) {
-          return false;
-        }
+        if (!canDecryptSubmission(submission)) return false;
         return submission.answers.some((answer) =>
           answer.encrypted &&
           answer.encryption === "seal" &&
@@ -897,9 +912,9 @@ export default function DashboardPage() {
     setDecryptingSubmissionId(submissionIdentity(selectedSubmission));
 
     try {
-      if (selectedSubmission.formOwnerAddress && selectedSubmission.formOwnerAddress.toLowerCase() !== account.address.toLowerCase()) {
-        throw new Error("Only the form owner wallet can decrypt this answer.");
-      }
+    if (!canDecryptSubmission(selectedSubmission)) {
+      throw new Error("Only the form owner wallet can decrypt this answer.");
+    }
 
       await checkSealKeyServerReachable();
       const sessionKey = await getSignedSealSessionKey();
@@ -930,6 +945,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!selectedSubmission || !selectedSubmissionIdentity || !account) return;
     if (selectedEncryptedAnswers.length === 0) return;
+    if (!canDecryptSubmission(selectedSubmission)) return;
     if (autoDecryptAttempted.current.has(selectedSubmissionIdentity)) return;
     const allDecrypted = selectedEncryptedAnswers.every((answer) =>
       Boolean(decryptedAnswers[answerDecryptKey(selectedSubmission, answer)])
@@ -941,7 +957,7 @@ export default function DashboardPage() {
   }, [account?.address, selectedSubmissionIdentity, selectedEncryptedAnswers.length]);
 
   const stats = hasOwnedForms ? [
-    { label: "My forms", value: ownedForms.length },
+    { label: isConfiguredAdmin ? "Managed forms" : "My forms", value: ownedForms.length },
     { label: "Visible reports", value: visibleSubmissions.length },
     { label: "New", value: visibleSubmissions.filter((s) => s.status === "new").length },
     { label: "High priority", value: visibleSubmissions.filter((s) => s.priority === "high").length },
@@ -1112,7 +1128,7 @@ export default function DashboardPage() {
             {hasOwnedForms ? "Operations" : "Submissions"}
           </p>
           <h1 className="text-2xl font-semibold tracking-tight text-slate-950">
-            {hasOwnedForms ? "Admin dashboard" : "My submissions"}
+            {hasOwnedForms ? (isConfiguredAdmin ? "Admin dashboard" : "Owner dashboard") : "My submissions"}
           </h1>
           <p className="mt-1 text-xs text-slate-400">
             Connected as <span className="font-mono">{shortenAddress(account.address)}</span>
@@ -1130,7 +1146,9 @@ export default function DashboardPage() {
       {!isDemo && (
         <div className="mb-5 flex items-center gap-2 rounded-lg border border-sky-100 bg-sky-50 px-4 py-2.5 text-sm text-sky-800 shadow-sm">
           <Database size={14} className="shrink-0" />
-          {source === "sui"
+          {isConfiguredAdmin
+            ? "Admin access active from NEXT_PUBLIC_ADMIN_WALLETS. Showing all discoverable submissions."
+            : source === "sui"
             ? "Showing submissions discovered from the Sui registry."
             : "Showing local fallback submissions. Configure Sui registry env to enable global discovery."}
         </div>
@@ -1461,7 +1479,7 @@ export default function DashboardPage() {
         <div className="border-b border-slate-100 bg-slate-50/80 px-4 py-3">
           <h2 className="text-sm font-semibold text-slate-900">Respondent reports</h2>
           <p className="mt-1 text-xs text-slate-400">
-            Detailed answers are hidden unless this wallet created the form.
+            Detailed answers are visible to form owners and configured admins. Seal decrypt still requires owner authorization.
           </p>
         </div>
         {loading ? (
@@ -1605,7 +1623,7 @@ export default function DashboardPage() {
 	                            </p>
 	                          </div>
 	                          <div className="flex flex-wrap gap-2">
-	                            {s.answers.some((answer) => answer.encrypted && answer.encryption === "seal" && answer.sealId) && (
+                            {canDecryptSubmission(s) && s.answers.some((answer) => answer.encrypted && answer.encryption === "seal" && answer.sealId) && (
 	                              <button
 	                                type="button"
 	                                onClick={decryptSelectedSubmission}
