@@ -1,0 +1,63 @@
+# =========================
+# Node / Next.js
+# =========================
+node_modules/
+.next/
+out/
+build/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Env
+.env
+.env.local
+.env.production.local
+.env.development.local
+
+# Vercel
+.vercel/
+
+# Turbo
+.turbo/
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# =========================
+# Sui Move
+# =========================
+
+# Move build output
+move/build/
+build/
+
+# Move cache
+Move.lock
+
+# Sui client
+.sui/
+
+# bytecode / temp
+*.mv
+.bytecode/
+
+# =========================
+# Optional
+# =========================
+coverage/
+.cache/
+
+.agents
+.codex
