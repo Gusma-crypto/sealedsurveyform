@@ -8,17 +8,109 @@
 
 @layer base {
   html {
-    @apply bg-slate-50;
+    @apply bg-cyan-50 dark:bg-black;
   }
 
   body {
-    @apply text-slate-900 antialiased;
+    @apply text-black antialiased dark:text-white;
     background:
-      radial-gradient(circle at top left, rgba(14, 165, 233, 0.10), transparent 32rem),
-      linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+      radial-gradient(circle at top left, rgba(20, 184, 166, 0.16), transparent 32rem),
+      radial-gradient(circle at top right, rgba(250, 204, 21, 0.12), transparent 28rem),
+      linear-gradient(180deg, #ecfeff 0%, #f8fafc 52%, #fefce8 100%);
     font-family:
       Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
       sans-serif;
+  }
+
+  .dark body {
+    background:
+      radial-gradient(circle at top left, rgba(124, 58, 237, 0.18), transparent 30rem),
+      linear-gradient(180deg, #000000 0%, #050505 100%);
+  }
+
+  .dark input,
+  .dark textarea,
+  .dark select {
+    color: #ffffff;
+    background-color: #1f2937;
+    border-color: rgba(167, 139, 250, 0.55);
+  }
+
+  .dark [data-app-shell] .bg-white,
+  .dark [data-app-shell] .bg-white\/60,
+  .dark [data-app-shell] .bg-white\/70,
+  .dark [data-app-shell] .bg-white\/75,
+  .dark [data-app-shell] .bg-white\/80,
+  .dark [data-app-shell] .bg-white\/85,
+  .dark [data-app-shell] .bg-white\/90,
+  .dark [data-app-shell] .bg-slate-50,
+  .dark [data-app-shell] .bg-slate-50\/70,
+  .dark [data-app-shell] .bg-slate-50\/80,
+  .dark [data-app-shell] .bg-slate-50\/90,
+  .dark [data-app-shell] .bg-sky-50,
+  .dark [data-app-shell] .bg-sky-50\/40,
+  .dark [data-app-shell] .bg-sky-50\/50,
+  .dark [data-app-shell] .bg-sky-50\/60,
+  .dark [data-app-shell] .bg-sky-50\/80,
+  .dark [data-app-shell] .bg-amber-50,
+  .dark [data-app-shell] .bg-red-50,
+  .dark [data-app-shell] .bg-emerald-50 {
+    background-color: #111827 !important;
+  }
+
+  .dark [data-app-shell] .bg-slate-100,
+  .dark [data-app-shell] .hover\:bg-slate-100:hover,
+  .dark [data-app-shell] .hover\:bg-slate-50:hover,
+  .dark [data-app-shell] .hover\:bg-white:hover,
+  .dark [data-app-shell] .hover\:bg-sky-50\/40:hover,
+  .dark [data-app-shell] .hover\:bg-red-50:hover,
+  .dark [data-app-shell] .hover\:bg-amber-50:hover {
+    background-color: #1f2937 !important;
+  }
+
+  .dark [data-app-shell] .border-slate-100,
+  .dark [data-app-shell] .border-slate-100\/80,
+  .dark [data-app-shell] .border-slate-200,
+  .dark [data-app-shell] .border-slate-300,
+  .dark [data-app-shell] .border-sky-100,
+  .dark [data-app-shell] .border-sky-200,
+  .dark [data-app-shell] .border-amber-100,
+  .dark [data-app-shell] .border-red-100,
+  .dark [data-app-shell] .border-emerald-100,
+  .dark [data-app-shell] .divide-slate-100 > :not([hidden]) ~ :not([hidden]),
+  .dark [data-app-shell] .divide-slate-200 > :not([hidden]) ~ :not([hidden]) {
+    border-color: rgba(167, 139, 250, 0.58) !important;
+  }
+
+  .dark [data-app-shell] .text-slate-950,
+  .dark [data-app-shell] .text-slate-900,
+  .dark [data-app-shell] .text-slate-800,
+  .dark [data-app-shell] .text-slate-700,
+  .dark [data-app-shell] .text-slate-600,
+  .dark [data-app-shell] .text-slate-500,
+  .dark [data-app-shell] .text-sky-900,
+  .dark [data-app-shell] .text-sky-800,
+  .dark [data-app-shell] .text-sky-700,
+  .dark [data-app-shell] .text-amber-800,
+  .dark [data-app-shell] .text-amber-700,
+  .dark [data-app-shell] .text-red-700,
+  .dark [data-app-shell] .text-emerald-900,
+  .dark [data-app-shell] .text-emerald-700 {
+    color: #ffffff !important;
+  }
+
+  .dark [data-app-shell] .text-slate-400,
+  .dark [data-app-shell] .text-slate-300 {
+    color: #d1d5db !important;
+  }
+
+  .dark [data-app-shell] table,
+  .dark [data-app-shell] thead,
+  .dark [data-app-shell] tbody,
+  .dark [data-app-shell] tr,
+  .dark [data-app-shell] td,
+  .dark [data-app-shell] th {
+    color: #ffffff;
   }
 }
 
@@ -27,26 +119,26 @@
     @apply inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium shadow-sm transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-60;
   }
   .btn-primary {
-    @apply border-slate-950 bg-slate-950 text-white hover:-translate-y-0.5 hover:bg-slate-800 hover:shadow-md;
+    @apply border-teal-600 bg-teal-500 text-black hover:-translate-y-0.5 hover:bg-teal-400 hover:shadow-md dark:border-violet-400 dark:bg-violet-600 dark:text-white dark:hover:bg-violet-500;
   }
   .btn-secondary {
-    @apply border-slate-200 bg-white/85 text-slate-700 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-white hover:text-slate-950 hover:shadow-md;
+    @apply border-teal-100 bg-white/85 text-slate-800 hover:-translate-y-0.5 hover:border-teal-300 hover:bg-white hover:text-black hover:shadow-md dark:border-violet-400/60 dark:bg-gray-800 dark:text-white dark:hover:border-violet-300 dark:hover:bg-gray-700;
   }
   .card {
-    @apply rounded-lg border border-white/70 bg-white/90 p-5 ring-1 ring-slate-900/[0.03] backdrop-blur;
-    box-shadow: 0 18px 50px rgba(15, 23, 42, 0.07);
+    @apply rounded-lg border border-white/70 bg-white/90 p-5 ring-1 ring-teal-900/[0.04] backdrop-blur dark:border-violet-400/55 dark:bg-gray-900 dark:text-white dark:ring-violet-400/20;
+    box-shadow: 0 18px 50px rgba(15, 118, 110, 0.10);
   }
   .input {
-    @apply w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm placeholder:text-slate-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-slate-900;
+    @apply w-full rounded-lg border border-teal-100 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm placeholder:text-slate-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-teal-500 dark:border-violet-400/60 dark:bg-gray-800 dark:text-white dark:placeholder:text-gray-400 dark:focus:ring-violet-400;
   }
   .label {
-    @apply mb-1.5 block text-xs font-medium text-slate-500;
+    @apply mb-1.5 block text-xs font-medium text-slate-500 dark:text-slate-300;
   }
   .section-label {
-    @apply mb-4 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400;
+    @apply mb-4 text-xs font-semibold uppercase tracking-[0.18em] text-teal-700 dark:text-violet-300;
   }
   .panel {
-    @apply rounded-lg border border-white/70 bg-white/85 ring-1 ring-slate-900/[0.04] backdrop-blur;
-    box-shadow: 0 22px 70px rgba(15, 23, 42, 0.08);
+    @apply rounded-lg border border-white/70 bg-white/85 ring-1 ring-teal-900/[0.04] backdrop-blur dark:border-violet-400/55 dark:bg-gray-900 dark:text-white dark:ring-violet-400/20;
+    box-shadow: 0 22px 70px rgba(15, 118, 110, 0.10);
   }
 }

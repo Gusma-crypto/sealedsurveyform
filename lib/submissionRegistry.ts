@@ -1,6 +1,7 @@
 import { Transaction } from "@mysten/sui/transactions";
 import type { FormSubmission } from "@/types";
 import { downloadFromWalrus } from "@/lib/walrus";
+import { hexToBytes } from "@/lib/seal";
 
 const REGISTRY_INDEX_KEY = "sealedsurvey:registry:submissions";
 const FORM_REGISTRY_INDEX_KEY = "sealedsurvey:registry:forms";
@@ -10,10 +11,13 @@ export interface SubmissionRegistryEntry {
   formTitle: string;
   submissionBlobId: string;
   submitterAddress?: string;
+  submitterEmail?: string;
+  sealIds?: string[];
   encrypted: boolean;
   timestamp: string;
   txDigest?: string;
   suiFormObjectId?: string;
+  suiPackageId?: string;
   chainSubmissionId?: string;
 }
 
@@ -26,6 +30,7 @@ export interface FormRegistryEntry {
   timestamp: string;
   txDigest?: string;
   suiFormObjectId?: string;
+  suiPackageId?: string;
 }
 
 export interface ReviewRegistryEntry {
@@ -83,7 +88,7 @@ export function isSuiRegistryConfigured() {
   return Boolean(config.packageId && config.registryObjectId);
 }
 
-function loadLocalRegistryEntries(): SubmissionRegistryEntry[] {
+export function loadLocalSubmissionRegistryEntries(): SubmissionRegistryEntry[] {
   if (typeof window === "undefined") return [];
   try {
     return JSON.parse(localStorage.getItem(REGISTRY_INDEX_KEY) || "[]");
@@ -97,17 +102,17 @@ function saveLocalRegistryEntries(entries: SubmissionRegistryEntry[]) {
 }
 
 export function recordLocalSubmissionEntry(entry: SubmissionRegistryEntry) {
-  const entries = loadLocalRegistryEntries();
+  const entries = loadLocalSubmissionRegistryEntries();
   if (!entries.some((item) => item.submissionBlobId === entry.submissionBlobId)) {
     saveLocalRegistryEntries([entry, ...entries]);
   }
 }
 
 export function findLocalSubmissionEntry(blobId: string): SubmissionRegistryEntry | null {
-  return loadLocalRegistryEntries().find((entry) => entry.submissionBlobId === blobId) ?? null;
+  return loadLocalSubmissionRegistryEntries().find((entry) => entry.submissionBlobId === blobId) ?? null;
 }
 
-function loadLocalFormRegistryEntries(): FormRegistryEntry[] {
+export function loadLocalFormRegistryEntries(): FormRegistryEntry[] {
   if (typeof window === "undefined") return [];
   try {
     return JSON.parse(localStorage.getItem(FORM_REGISTRY_INDEX_KEY) || "[]");
@@ -139,7 +144,8 @@ export function buildRegisterSubmissionTx(entry: SubmissionRegistryEntry) {
       tx.pure.string(entry.formId),
       tx.pure.string(entry.formTitle),
       tx.pure.string(entry.submissionBlobId),
-      tx.pure.string(entry.submitterAddress ?? ""),
+      tx.pure.string(entry.submitterEmail ?? ""),
+      tx.pure.vector("vector<u8>", (entry.sealIds ?? []).map(hexToBytes)),
       tx.pure.bool(entry.encrypted),
       tx.pure.string(entry.timestamp),
     ],
@@ -158,7 +164,8 @@ export function appendRegisterSubmissionCall(tx: Transaction, entry: SubmissionR
       tx.pure.string(entry.formId),
       tx.pure.string(entry.formTitle),
       tx.pure.string(entry.submissionBlobId),
-      tx.pure.string(entry.submitterAddress ?? ""),
+      tx.pure.string(entry.submitterEmail ?? ""),
+      tx.pure.vector("vector<u8>", (entry.sealIds ?? []).map(hexToBytes)),
       tx.pure.bool(entry.encrypted),
       tx.pure.string(entry.timestamp),
     ],
@@ -229,16 +236,19 @@ export function buildUpdateFormObjectTx(entry: FormRegistryEntry & { suiFormObje
 
 export function buildSubmitFormObjectTx(entry: SubmissionRegistryEntry & { suiFormObjectId: string }) {
   const config = getRegistryConfig();
-  if (!config.packageId) {
+  const packageId = entry.suiPackageId || config.packageId;
+  if (!packageId) {
     throw new Error("Sui package is not configured.");
   }
 
   const tx = new Transaction();
   tx.moveCall({
-    target: `${config.packageId}::${config.module}::${config.submitFormObjectFunction}`,
+    target: `${packageId}::${config.module}::${config.submitFormObjectFunction}`,
     arguments: [
       tx.object(entry.suiFormObjectId),
       tx.pure.string(entry.submissionBlobId),
+      tx.pure.string(entry.submitterEmail ?? ""),
+      tx.pure.vector("vector<u8>", (entry.sealIds ?? []).map(hexToBytes)),
       tx.pure.bool(entry.encrypted),
       tx.pure.string(entry.timestamp),
     ],
@@ -318,12 +328,14 @@ export async function loadFormSchemaFromSuiObject(client: any, objectId: string)
   });
   const content = response.data?.content;
   if (!content || content.dataType !== "moveObject") return null;
-  if (!String(content.type ?? "").endsWith("::submission_registry::FormObject")) return null;
+  const type = String(content.type ?? "");
+  if (!type.endsWith("::submission_registry::FormObject")) return null;
 
   const fields = content.fields ?? {};
   const formBlobId = moveString(fields.form_blob_id);
   const formId = moveString(fields.form_id);
   if (!formBlobId || !formId) return null;
+  const packageId = type.split("::")[0];
 
   return {
     formId,
@@ -333,6 +345,7 @@ export async function loadFormSchemaFromSuiObject(client: any, objectId: string)
     shareSlug: moveString(fields.share_slug) || "untitled-form",
     timestamp: new Date().toISOString(),
     suiFormObjectId: objectId,
+    suiPackageId: packageId,
   };
 }
 
@@ -367,6 +380,7 @@ export async function loadFormEntriesFromSui(client: any): Promise<FormRegistryE
         timestamp: json.timestamp ?? new Date(Number(event.timestampMs ?? Date.now())).toISOString(),
         txDigest: event.id?.txDigest,
         suiFormObjectId: json.formObjectId ?? json.form_object_id,
+        suiPackageId: String(event.type ?? "").split("::")[0],
       } satisfies FormRegistryEntry;
     })
     .filter(Boolean) as FormRegistryEntry[];
@@ -414,10 +428,12 @@ export async function loadSubmissionEntriesFromSui(client: any): Promise<Submiss
         formTitle: json.formTitle ?? json.form_title ?? "Untitled form",
         submissionBlobId,
         submitterAddress: json.submitterAddress ?? json.submitter_address,
+        submitterEmail: json.submitterEmail ?? json.submitter_email,
         encrypted: Boolean(json.encrypted),
         timestamp: json.timestamp ?? new Date(Number(event.timestampMs ?? Date.now())).toISOString(),
         txDigest: event.id?.txDigest,
         suiFormObjectId: json.formObjectId ?? json.form_object_id,
+        suiPackageId: String(event.type ?? "").split("::")[0],
         chainSubmissionId:
           json.submissionId === undefined && json.submission_id === undefined
             ? undefined
@@ -469,7 +485,7 @@ export async function loadReviewEntriesFromSui(client: any): Promise<ReviewRegis
 
 export async function loadRegisteredSubmissions(client?: any): Promise<FormSubmission[]> {
   const entries = client ? await loadSubmissionEntriesFromSui(client).catch(() => []) : [];
-  const sourceEntries = entries.length > 0 ? entries : loadLocalRegistryEntries();
+  const sourceEntries = entries.length > 0 ? entries : loadLocalSubmissionRegistryEntries();
   const reviewEntries = client ? await loadReviewEntriesFromSui(client).catch(() => []) : [];
   const latestReview = new Map<string, ReviewRegistryEntry>();
 
@@ -500,6 +516,7 @@ export async function loadRegisteredSubmissions(client?: any): Promise<FormSubmi
       formOwnerAddress: value.submission.formOwnerAddress,
       registryTxDigest: value.submission.registryTxDigest ?? value.entry.txDigest,
       suiFormObjectId: value.submission.suiFormObjectId ?? value.entry.suiFormObjectId,
+      suiPackageId: value.submission.suiPackageId ?? value.entry.suiPackageId,
       chainSubmissionId: value.submission.chainSubmissionId ?? value.entry.chainSubmissionId,
       ...(value.entry.suiFormObjectId && value.entry.chainSubmissionId
         ? (() => {

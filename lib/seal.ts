@@ -46,6 +46,42 @@ function getCompatibleSealClient(preferredClient?: any) {
   return preferredClient?.core?.getObject ? preferredClient : getSealSuiClient();
 }
 
+async function buildSealApprovalTxBytes({
+  accountAddress,
+  formId,
+  id,
+  txBuildClient,
+}: {
+  accountAddress: string;
+  formId: string;
+  id: string;
+  txBuildClient: any;
+}) {
+  const config = getSealConfig();
+  if (!config.approveTarget) {
+    throw new Error("Missing NEXT_PUBLIC_SEAL_APPROVE_TARGET.");
+  }
+  if (!config.registryObjectId) {
+    throw new Error("Missing NEXT_PUBLIC_REGISTRY_ID.");
+  }
+
+  const tx = new Transaction();
+  tx.setSender(accountAddress);
+  tx.moveCall({
+    target: config.approveTarget,
+    arguments: [
+      tx.pure.vector("u8", hexToBytes(id)),
+      tx.object(config.registryObjectId),
+      tx.pure.string(formId),
+    ],
+  });
+
+  return tx.build({
+    client: txBuildClient,
+    onlyTransactionKind: true,
+  });
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = "";
   bytes.forEach((byte) => {
@@ -183,17 +219,12 @@ export async function sealDecryptValue({
   });
   await sessionKey.setPersonalMessageSignature(signed.signature);
 
-  const tx = new Transaction();
-  tx.setSender(accountAddress);
-  tx.moveCall({
-    target: config.approveTarget,
-    arguments: [
-      tx.object(config.registryObjectId),
-      tx.pure.string(formId),
-      tx.pure.vector("u8", hexToBytes(id)),
-    ],
+  const txBytes = await buildSealApprovalTxBytes({
+    accountAddress,
+    formId,
+    id,
+    txBuildClient,
   });
-  const txBytes = await tx.build({ client: txBuildClient });
 
   const client = new SealClient({
     suiClient: sealSuiClient as any,
@@ -261,17 +292,12 @@ export async function sealDecryptValueWithSession({
     throw new Error("Missing NEXT_PUBLIC_REGISTRY_ID.");
   }
 
-  const tx = new Transaction();
-  tx.setSender(accountAddress);
-  tx.moveCall({
-    target: config.approveTarget,
-    arguments: [
-      tx.object(config.registryObjectId),
-      tx.pure.string(formId),
-      tx.pure.vector("u8", hexToBytes(id)),
-    ],
+  const txBytes = await buildSealApprovalTxBytes({
+    accountAddress,
+    formId,
+    id,
+    txBuildClient,
   });
-  const txBytes = await tx.build({ client: txBuildClient });
 
   const client = new SealClient({
     suiClient: getCompatibleSealClient(txBuildClient) as any,

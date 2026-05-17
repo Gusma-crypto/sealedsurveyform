@@ -3,9 +3,9 @@
 import { useState, useCallback } from "react";
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
 import {
-  Plus, Save, Link2, Copy, Check, Trash2, Lock, LockOpen,
-  AlignLeft, ChevronDown, CheckSquare, Star, Image, Video, Globe, Mail,
-  GripVertical, Shield, Database, Loader2
+  Plus, Send, Link2, Copy, Check, Trash2, Lock, LockOpen,
+  AlignLeft, ChevronDown, CheckSquare, Star, Image, Video, Globe,
+  Shield, Database, Loader2, LayoutTemplate, Eye, X, FileText
 } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
 import { AdminGate } from "@/components/AdminGate";
@@ -29,12 +29,26 @@ const FIELD_TYPES: { type: FieldType; label: string; icon: React.ReactNode }[] =
   { type: "rating", label: "Star rating", icon: <Star size={14} /> },
   { type: "screenshot", label: "Screenshot", icon: <Image size={14} /> },
   { type: "video", label: "Video upload", icon: <Video size={14} /> },
-  { type: "email", label: "Email", icon: <Mail size={14} /> },
   { type: "url", label: "URL", icon: <Globe size={14} /> },
   { type: "text", label: "Short text", icon: <AlignLeft size={14} /> },
 ];
 
-function makeField(type: FieldType): FormField {
+const BUILDER_DRAFT_KEY = "sealedsurvey:builder-draft";
+
+type BuilderDraft = {
+  formId: string;
+  title: string;
+  fields: FormField[];
+  sealEnabled: boolean;
+  openAt?: string;
+  closeAt?: string;
+  savedAt: string;
+};
+
+type PreviewValue = string | string[] | number | null;
+type PreviewAnswers = Record<string, PreviewValue>;
+
+function makeField(type: FieldType, overrides: Partial<FormField> = {}): FormField {
   const labels: Record<FieldType, string> = {
     text: "Short answer",
     richtext: "Long answer",
@@ -55,7 +69,107 @@ function makeField(type: FieldType): FormField {
     encrypted: false,
     options: type === "dropdown" || type === "checkbox" ? ["Option 1", "Option 2"] : undefined,
     maxRating: type === "rating" ? 5 : undefined,
+    ...overrides,
   };
+}
+
+type FormTemplate = {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  fields: Array<{ type: FieldType; label: string; placeholder?: string; required?: boolean; options?: string[]; maxRating?: number }>;
+};
+
+const FORM_TEMPLATES: FormTemplate[] = [
+  {
+    id: "bug-report",
+    title: "Bug report",
+    category: "Issue intake",
+    description: "Capture reproducible defects with environment, severity, and attachments.",
+    fields: [
+      { type: "text", label: "Bug title", placeholder: "Login button fails on mobile", required: true },
+      { type: "richtext", label: "Steps to reproduce", placeholder: "1. Open...\n2. Click...", required: true },
+      { type: "dropdown", label: "Severity", required: true, options: ["Low", "Medium", "High", "Critical"] },
+      { type: "url", label: "Affected URL", placeholder: "https://..." },
+      { type: "screenshot", label: "Screenshot evidence" },
+    ],
+  },
+  {
+    id: "feature-request",
+    title: "Feature request",
+    category: "Product feedback",
+    description: "Collect feature ideas, user goals, impact, and prioritization signal.",
+    fields: [
+      { type: "text", label: "Feature name", placeholder: "Saved filters", required: true },
+      { type: "richtext", label: "Problem this solves", placeholder: "Describe the user problem...", required: true },
+      { type: "dropdown", label: "User segment", required: true, options: ["Individual", "Team", "Enterprise", "Developer"] },
+      { type: "rating", label: "Priority rating", required: true, maxRating: 5 },
+      { type: "checkbox", label: "Expected benefits", options: ["Save time", "Reduce errors", "Improve reporting", "Increase adoption"] },
+    ],
+  },
+  {
+    id: "customer-survey",
+    title: "Customer satisfaction survey",
+    category: "Survey",
+    description: "Measure satisfaction and gather structured qualitative feedback.",
+    fields: [
+      { type: "rating", label: "Overall satisfaction", required: true, maxRating: 5 },
+      { type: "dropdown", label: "How often do you use this product?", required: true, options: ["Daily", "Weekly", "Monthly", "Rarely"] },
+      { type: "checkbox", label: "What do you use most?", options: ["Dashboard", "Forms", "Exports", "Encryption", "Integrations"] },
+      { type: "richtext", label: "What should we improve?", placeholder: "Share specific suggestions..." },
+    ],
+  },
+  {
+    id: "grant-application",
+    title: "Grant application",
+    category: "Application",
+    description: "Gather applicant details, project scope, budget, and public links.",
+    fields: [
+      { type: "text", label: "Project name", required: true },
+      { type: "url", label: "Project website or repository", placeholder: "https://...", required: true },
+      { type: "richtext", label: "Project summary", placeholder: "What are you building?", required: true },
+      { type: "dropdown", label: "Requested funding range", required: true, options: ["< $5k", "$5k - $25k", "$25k - $100k", "> $100k"] },
+      { type: "richtext", label: "Milestones", placeholder: "List expected milestones and dates..." },
+    ],
+  },
+  {
+    id: "event-registration",
+    title: "Event registration",
+    category: "Application",
+    description: "Register participants with role, attendance type, and preferences.",
+    fields: [
+      { type: "text", label: "Full name", required: true },
+      { type: "dropdown", label: "Attendance type", required: true, options: ["In person", "Virtual", "Waitlist"] },
+      { type: "checkbox", label: "Sessions interested in", options: ["Workshops", "Panels", "Networking", "Demo day"] },
+      { type: "richtext", label: "Dietary or accessibility needs", placeholder: "Optional notes..." },
+    ],
+  },
+  {
+    id: "creator-application",
+    title: "Creator application",
+    category: "Application",
+    description: "Review creators, portfolios, experience, and sample media.",
+    fields: [
+      { type: "text", label: "Display name", required: true },
+      { type: "url", label: "Portfolio link", placeholder: "https://...", required: true },
+      { type: "dropdown", label: "Primary content type", required: true, options: ["Writing", "Video", "Design", "Development", "Community"] },
+      { type: "richtext", label: "Relevant experience", placeholder: "Summarize past work...", required: true },
+      { type: "video", label: "Intro video" },
+    ],
+  },
+];
+
+function templateFields(template: FormTemplate) {
+  return template.fields.map((field) =>
+    makeField(field.type, {
+      label: field.label,
+      placeholder: field.placeholder ?? "",
+      required: field.required ?? false,
+      options: field.options ? [...field.options] : undefined,
+      maxRating: field.type === "rating" ? field.maxRating ?? 5 : undefined,
+    })
+  );
 }
 
 function FieldPreview({ field }: { field: FormField }) {
@@ -104,6 +218,116 @@ function FieldPreview({ field }: { field: FormField }) {
   );
 }
 
+function emptyPreviewValue(field: FormField): PreviewValue {
+  if (field.type === "checkbox") return [];
+  if (field.type === "rating") return null;
+  return "";
+}
+
+function FormPreviewControl({
+  field,
+  value,
+  onChange,
+}: {
+  field: FormField;
+  value: PreviewValue;
+  onChange: (value: PreviewValue) => void;
+}) {
+  if (field.type === "rating") {
+    const rating = typeof value === "number" ? value : 0;
+    return (
+      <div className="flex gap-1.5">
+        {Array.from({ length: field.maxRating ?? 5 }).map((_, index) => {
+          const score = index + 1;
+          return (
+            <button
+              key={score}
+              type="button"
+              onClick={() => onChange(score)}
+              className="rounded-md p-1 text-amber-300 transition-colors hover:bg-amber-50"
+              aria-label={`Rate ${score}`}
+            >
+              <Star size={22} fill={score <= rating ? "currentColor" : "none"} />
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  if (field.type === "dropdown") {
+    return (
+      <div className="relative">
+        <select
+          value={typeof value === "string" ? value : ""}
+          onChange={(event) => onChange(event.target.value)}
+          className="input appearance-none pr-9 text-sm"
+        >
+          <option value="">Select an option</option>
+          {(field.options ?? []).filter(Boolean).map((option) => (
+            <option key={option} value={option}>{option}</option>
+          ))}
+        </select>
+        <ChevronDown size={16} className="pointer-events-none absolute right-3 top-2.5 text-slate-400" />
+      </div>
+    );
+  }
+
+  if (field.type === "checkbox") {
+    const selected = Array.isArray(value) ? value : [];
+    return (
+      <div className="space-y-2">
+        {(field.options ?? []).filter(Boolean).map((option) => (
+          <label key={option} className="flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
+            <input
+              type="checkbox"
+              checked={selected.includes(option)}
+              onChange={(event) =>
+                onChange(
+                  event.target.checked
+                    ? [...selected, option]
+                    : selected.filter((item) => item !== option)
+                )
+              }
+              className="h-4 w-4 rounded border-slate-300 text-slate-950 focus:ring-slate-900"
+            />
+            {option}
+          </label>
+        ))}
+      </div>
+    );
+  }
+
+  if (field.type === "richtext") {
+    return (
+      <textarea
+        value={typeof value === "string" ? value : ""}
+        onChange={(event) => onChange(event.target.value)}
+        className="input min-h-28 resize-y text-sm"
+        placeholder={field.placeholder || "Type your answer..."}
+      />
+    );
+  }
+
+  if (field.type === "screenshot" || field.type === "video") {
+    return (
+      <div className="rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-center text-sm text-slate-400">
+        Upload {field.type === "screenshot" ? "image" : "video"}
+      </div>
+    );
+  }
+
+  return (
+    <input
+      type={field.type === "url" ? "url" : field.type === "email" ? "email" : "text"}
+      value={typeof value === "string" ? value : ""}
+      onChange={(event) => onChange(event.target.value)}
+      className="input text-sm"
+      placeholder={field.placeholder || (field.type === "email" ? "name@example.com" : "Type your answer...")}
+    />
+  );
+}
+
 function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
     return navigator.clipboard.writeText(text);
@@ -126,11 +350,38 @@ type SchemaIssue = {
   message: string;
 };
 
-function validateFormSchema(title: string, fields: FormField[]): SchemaIssue[] {
+function toDateTimeLocalValue(value?: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const offsetMs = date.getTimezoneOffset() * 60 * 1000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+function fromDateTimeLocalValue(value: string) {
+  return value ? new Date(value).toISOString() : undefined;
+}
+
+function formatScheduleDate(value?: string) {
+  if (!value) return "-";
+  return new Date(value).toLocaleString("id-ID", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function validateFormSchema(title: string, fields: FormField[], openAt?: string, closeAt?: string): SchemaIssue[] {
   const issues: SchemaIssue[] = [];
   if (!title.trim()) issues.push({ message: "Form title is required." });
   if (fields.length === 0) issues.push({ message: "Add at least one field." });
-
+  if (!openAt) issues.push({ message: "Open date is required before publish." });
+  if (!closeAt) issues.push({ message: "Close date is required before publish." });
+  if (openAt && closeAt && new Date(openAt).getTime() >= new Date(closeAt).getTime()) {
+    issues.push({ message: "Close date must be later than open date." });
+  }
   for (const field of fields) {
     if (!field.label.trim()) {
       issues.push({ fieldId: field.id, message: "Field label is required." });
@@ -217,7 +468,7 @@ export default function BuilderPage() {
   const signAndExecute = useSignAndExecuteTransaction();
   const [formId, setFormId] = useState(() => uuidv4());
   const [title, setTitle] = useState("Untitled form");
-  const [fields, setFields] = useState<FormField[]>([makeField("richtext")]);
+  const [fields, setFields] = useState<FormField[]>(() => [makeField("richtext")]);
   const [selected, setSelected] = useState<string>(fields[0].id);
   const [sealEnabled, setSealEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -228,19 +479,99 @@ export default function BuilderPage() {
   const [sourceBlobId, setSourceBlobId] = useState("");
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewAnswers, setPreviewAnswers] = useState<PreviewAnswers>({});
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
+  const [draftMessage, setDraftMessage] = useState<string | null>(null);
+  const [openAt, setOpenAt] = useState<string>("");
+  const [closeAt, setCloseAt] = useState<string>("");
 
   const slug = title.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") || "untitled-form";
   const origin = typeof window !== "undefined" ? window.location.origin : "";
-  const schemaIssues = validateFormSchema(title, fields);
+  const openAtIso = fromDateTimeLocalValue(openAt);
+  const closeAtIso = fromDateTimeLocalValue(closeAt);
+  const schemaIssues = validateFormSchema(title, fields, openAtIso, closeAtIso);
   const getPublicUrl = (identifier: string) => `${origin}/form/${slug}--${encodeURIComponent(identifier)}`;
   const shareIdentifier = savedFormObjectId ?? savedBlobId;
-  const shareUrl = shareIdentifier ? getPublicUrl(shareIdentifier) : "Save to generate a public Walrus/Sui link";
+  const shareUrl = shareIdentifier ? getPublicUrl(shareIdentifier) : "Publish to generate a public Walrus/Sui link";
 
   const selectedField = fields.find((f) => f.id === selected);
 
   const markDirty = () => {
     setSavedBlobId(null);
+    setSavedFormObjectId(null);
     setCopied(false);
+  };
+
+  const saveDraft = () => {
+    const savedAt = new Date().toISOString();
+    const draft: BuilderDraft = {
+      formId,
+      title,
+      fields,
+      sealEnabled,
+      openAt: openAtIso,
+      closeAt: closeAtIso,
+      savedAt,
+    };
+    localStorage.setItem(BUILDER_DRAFT_KEY, JSON.stringify(draft));
+    setDraftSavedAt(savedAt);
+    setDraftMessage("Draft saved locally.");
+    setTimeout(() => setDraftMessage(null), 1800);
+  };
+
+  const loadDraft = () => {
+    try {
+      const raw = localStorage.getItem(BUILDER_DRAFT_KEY);
+      if (!raw) {
+        setDraftMessage("No local draft found.");
+        setTimeout(() => setDraftMessage(null), 1800);
+        return;
+      }
+
+      const draft = JSON.parse(raw) as BuilderDraft;
+      const draftFields = draft.fields?.length
+        ? draft.fields.filter((field) => field.label.trim().toLowerCase() !== "username" && field.type !== "email" && field.label.trim().toLowerCase() !== "email")
+        : [];
+      const nextFields = draftFields.length > 0 ? draftFields : [makeField("richtext")];
+      setFormId(draft.formId || uuidv4());
+      setTitle(draft.title || "Untitled form");
+      setFields(nextFields);
+      setSelected(nextFields[0].id);
+      setSealEnabled(Boolean(draft.sealEnabled));
+      setOpenAt(toDateTimeLocalValue(draft.openAt));
+      setCloseAt(toDateTimeLocalValue(draft.closeAt));
+      setDraftSavedAt(draft.savedAt);
+      setSaveError(null);
+      setImportError(null);
+      setDraftMessage("Draft loaded.");
+      markDirty();
+      setTimeout(() => setDraftMessage(null), 1800);
+    } catch {
+      setDraftMessage("Unable to load local draft.");
+      setTimeout(() => setDraftMessage(null), 1800);
+    }
+  };
+
+  const openPreview = () => {
+    setPreviewAnswers(
+      Object.fromEntries(fields.map((field) => [field.id, previewAnswers[field.id] ?? emptyPreviewValue(field)]))
+    );
+    setPreviewOpen(true);
+  };
+
+  const applyTemplate = (template: FormTemplate) => {
+    const nextFields = templateFields(template);
+    setFormId(uuidv4());
+    setTitle(template.title);
+    setFields(nextFields);
+    setSelected(nextFields[0].id);
+    setSealEnabled(true);
+    setOpenAt("");
+    setCloseAt("");
+    setSaveError(null);
+    setImportError(null);
+    markDirty();
   };
 
   const addField = (type: FieldType) => {
@@ -254,6 +585,7 @@ export default function BuilderPage() {
     (id: string, updates: Partial<FormField>) => {
       setFields((prev) => prev.map((f) => (f.id === id ? { ...f, ...updates } : f)));
       setSavedBlobId(null);
+      setSavedFormObjectId(null);
       setCopied(false);
     },
     []
@@ -269,7 +601,7 @@ export default function BuilderPage() {
   };
 
   const handleSave = async (): Promise<{ blobId: string; formObjectId?: string } | null> => {
-    const issues = validateFormSchema(title, fields);
+    const issues = validateFormSchema(title, fields, openAtIso, closeAtIso);
     if (issues.length > 0) {
       setSelected(issues.find((issue) => issue.fieldId)?.fieldId ?? selected);
       setSaveError(issues[0].message);
@@ -287,9 +619,12 @@ export default function BuilderPage() {
       })),
       sealEncrypted: sealEnabled,
       createdAt: new Date().toISOString(),
+      openAt: openAtIso,
+      closeAt: closeAtIso,
       shareSlug: slug,
       ownerAddress: account?.address,
       suiFormObjectId: savedFormObjectId ?? undefined,
+      suiPackageId: getRegistryConfig().packageId,
     };
     try {
       const signer = account
@@ -326,6 +661,7 @@ export default function BuilderPage() {
 
           if (formObjectId) {
             registryEntry.suiFormObjectId = formObjectId;
+            registryEntry.suiPackageId = config.packageId;
             registryEntry.txDigest = digest;
             setSavedFormObjectId(formObjectId);
           }
@@ -357,7 +693,7 @@ export default function BuilderPage() {
       setSavedBlobId(blobId);
       return { blobId, formObjectId: registryEntry.suiFormObjectId };
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Save failed");
+      setSaveError(err instanceof Error ? err.message : "Publish failed");
       return null;
     } finally {
       setSaving(false);
@@ -389,12 +725,14 @@ export default function BuilderPage() {
         return;
       }
 
-      const copiedFields = sourceForm.fields.map((field) => ({
-        ...field,
-        id: uuidv4(),
-        options: field.options ? [...field.options] : undefined,
-      }));
-
+      const copiedFields = sourceForm.fields
+        .filter((field) => field.label.trim().toLowerCase() !== "username" && field.type !== "email" && field.label.trim().toLowerCase() !== "email")
+        .map((field) => ({
+          ...field,
+          id: uuidv4(),
+          required: field.required,
+          options: field.options ? [...field.options] : undefined,
+        }));
       const nextFields = copiedFields.length > 0 ? copiedFields : [makeField("richtext")];
 
       setFormId(uuidv4());
@@ -402,6 +740,8 @@ export default function BuilderPage() {
       setFields(nextFields);
       setSelected(nextFields[0].id);
       setSealEnabled(sourceForm.sealEncrypted);
+      setOpenAt(toDateTimeLocalValue(sourceForm.openAt));
+      setCloseAt(toDateTimeLocalValue(sourceForm.closeAt));
       setSavedBlobId(null);
       setSavedFormObjectId(null);
       setCopied(false);
@@ -416,11 +756,11 @@ export default function BuilderPage() {
 
   return (
     <AdminGate>
-    <div className="max-w-6xl mx-auto px-4 py-6 sm:py-8">
+    <div className="mx-auto max-w-7xl px-4 py-6 sm:py-8">
       {/* Header */}
-      <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="mb-5 rounded-lg border border-slate-200 bg-white px-4 py-4 shadow-sm">
         <div>
-          <p className="mb-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Builder</p>
+          <p className="mb-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">Form Builder</p>
           <input
             value={title}
             onChange={(e) => {
@@ -430,25 +770,28 @@ export default function BuilderPage() {
             className="w-full max-w-sm border-0 bg-transparent text-2xl font-semibold tracking-tight text-slate-950 outline-none"
             placeholder="Form title..."
           />
-        </div>
-        <div className="flex gap-2 shrink-0">
-          <button onClick={copyLink} disabled={saving} className="btn btn-secondary text-xs">
-            {saving ? <Loader2 size={13} className="animate-spin" /> : copied ? <Check size={13} /> : <Link2 size={13} />}
-            {saving ? "Saving..." : copied ? "Copied!" : "Copy public link"}
-          </button>
-          <button onClick={handleSave} disabled={saving} className="btn btn-primary text-xs">
-            {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
-            {saving ? "Uploading to Walrus…" : "Save to Walrus"}
-          </button>
+          <p className="mt-1 text-xs text-slate-400">
+            Respondent username and email are taken from the connected wallet profile, not from form fields.
+          </p>
         </div>
       </div>
+      {(draftMessage || draftSavedAt) && (
+        <div className="mb-4 flex flex-col gap-1 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-600 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <span>{draftMessage ?? "Local draft available."}</span>
+          {draftSavedAt && (
+            <span className="text-xs text-slate-400">
+              Last draft {new Date(draftSavedAt).toLocaleString("id-ID")}
+            </span>
+          )}
+        </div>
+      )}
 
-      {/* Save result */}
+      {/* Publish result */}
       {savedBlobId && (
         <div className="mb-4 flex flex-col gap-3 rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm shadow-sm sm:flex-row sm:items-center">
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <Database size={14} className="text-emerald-600 shrink-0" />
-            <span className="text-emerald-900 font-medium">Saved to Walrus</span>
+            <span className="text-emerald-900 font-medium">Published to Walrus</span>
             <span className="text-emerald-700 font-mono text-xs">{shortenBlobId(savedBlobId)}</span>
           </div>
           <div className={`inline-flex w-fit items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium ${
@@ -489,11 +832,51 @@ export default function BuilderPage() {
         </div>
       )}
 
+      <div className="mb-5 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-2 border-b border-slate-100 bg-slate-50/80 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">Templates</h2>
+            <p className="mt-1 text-xs text-slate-400">
+              Insert a complete draft for bug reports, feature requests, surveys, and applications.
+            </p>
+          </div>
+          <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-sky-100 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
+            <LayoutTemplate size={12} />
+            6 examples
+          </span>
+        </div>
+        <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
+          {FORM_TEMPLATES.map((template) => (
+            <button
+              key={template.id}
+              type="button"
+              onClick={() => applyTemplate(template)}
+              className="rounded-lg border border-slate-200 bg-white p-4 text-left shadow-sm transition-colors hover:border-sky-200 hover:bg-sky-50/40"
+            >
+              <div className="mb-2 flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-sm font-semibold text-slate-900">{template.title}</div>
+                  <div className="mt-1 text-[11px] font-medium uppercase tracking-wide text-slate-400">{template.category}</div>
+                </div>
+                <Plus size={14} className="mt-0.5 shrink-0 text-sky-600" />
+              </div>
+              <p className="text-xs leading-5 text-slate-500">{template.description}</p>
+              <div className="mt-3 text-xs text-slate-400">
+                {template.fields.length} fields · profile supplies username and email
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* 3-column layout */}
-      <div className="panel grid min-h-[560px] overflow-hidden lg:grid-cols-[220px_1fr_260px]">
+      <div className="panel grid min-h-[620px] overflow-hidden lg:grid-cols-[260px_1fr_300px]">
         {/* Left: field types */}
         <div className="border-b border-slate-200 bg-white/70 p-4 lg:border-b-0 lg:border-r">
           <p className="section-label mb-3">Field types</p>
+          <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-500">
+            Use templates for common flows, or add individual fields manually.
+          </div>
           <div className="grid grid-cols-2 gap-1 sm:grid-cols-4 lg:grid-cols-1">
             {FIELD_TYPES.map((ft) => (
               <button
@@ -588,11 +971,52 @@ export default function BuilderPage() {
               </p>
             </div>
           </div>
+
         </div>
 
         {/* Center: canvas */}
         <div className="bg-slate-50/70 p-5">
-          <p className="mb-4 text-xs text-slate-400">Canvas - click a field to edit</p>
+          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Canvas</p>
+              <p className="mt-1 text-xs text-slate-400">Click a field to edit label, options, encryption, or required state.</p>
+            </div>
+            <div className="inline-flex w-fit items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500">
+              {fields.length} fields
+            </div>
+          </div>
+          <div className="mb-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <p className="section-label mb-3">Schedule</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="label">Open date <span className="text-red-500">*</span></label>
+                <input
+                  type="datetime-local"
+                  value={openAt}
+                  onChange={(event) => {
+                    setOpenAt(event.target.value);
+                    markDirty();
+                  }}
+                  className="input text-xs"
+                />
+              </div>
+              <div>
+                <label className="label">Close date <span className="text-red-500">*</span></label>
+                <input
+                  type="datetime-local"
+                  value={closeAt}
+                  onChange={(event) => {
+                    setCloseAt(event.target.value);
+                    markDirty();
+                  }}
+                  className="input text-xs"
+                />
+              </div>
+            </div>
+            <p className="mt-3 text-xs leading-5 text-slate-500">
+              Public respondents can submit only within this window. Open and close dates are required before publish.
+            </p>
+          </div>
           <div className="space-y-2">
             {fields.map((f) => (
               <div
@@ -628,14 +1052,6 @@ export default function BuilderPage() {
             </button>
           </div>
 
-          {/* Share URL */}
-          <div className="mt-4 flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
-            <Link2 size={13} className="text-slate-400 shrink-0" />
-            <span className="text-xs text-slate-400 font-mono flex-1 truncate">{shareUrl}</span>
-            <button onClick={copyLink} disabled={saving} className="text-xs text-slate-500 hover:text-slate-950 disabled:cursor-not-allowed disabled:opacity-50 shrink-0">
-              {copied ? <Check size={13} /> : <Copy size={13} />}
-            </button>
-          </div>
         </div>
 
         {/* Right: properties */}
@@ -643,6 +1059,12 @@ export default function BuilderPage() {
           <p className="section-label">Field properties</p>
           {selectedField ? (
             <div className="space-y-4">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <div className="text-xs font-medium text-slate-700">{selectedField.type}</div>
+                <div className="mt-1 text-xs text-slate-400">
+                  {selectedField.required ? "Required field" : "Optional field"}
+                </div>
+              </div>
               <div>
                 <label className="label">Label</label>
                 <input
@@ -667,7 +1089,7 @@ export default function BuilderPage() {
                     value={(selectedField.options ?? []).join("\n")}
                     onChange={(e) =>
                       updateField(selectedField.id, {
-                        options: e.target.value.split("\n").filter(Boolean),
+                        options: e.target.value.split("\n"),
                       })
                     }
                     rows={4}
@@ -705,6 +1127,108 @@ export default function BuilderPage() {
           )}
         </div>
       </div>
+      <div className="mt-5 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+          <Link2 size={13} className="shrink-0 text-slate-400" />
+          <span className="min-w-0 flex-1 truncate font-mono text-xs text-slate-500">{shareUrl}</span>
+        </div>
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="text-sm font-medium text-slate-900">Ready to continue?</div>
+            <div className="mt-1 text-xs text-slate-400">
+              Save locally as draft, preview the respondent form, copy the public link, or publish to Walrus.
+            </div>
+            {(openAtIso || closeAtIso) && (
+              <div className="mt-2 text-xs text-slate-500">
+                Opens {formatScheduleDate(openAtIso)} · Closes {formatScheduleDate(closeAtIso)}
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={saveDraft} className="btn btn-secondary px-3 py-2 text-xs">
+              <FileText size={13} />
+              Draft
+            </button>
+            <button onClick={loadDraft} className="btn btn-secondary px-3 py-2 text-xs">
+              <Copy size={13} />
+              Load draft
+            </button>
+            <button onClick={openPreview} className="btn btn-secondary px-3 py-2 text-xs">
+              <Eye size={13} />
+              Preview
+            </button>
+            <button onClick={copyLink} disabled={saving} className="btn btn-secondary px-3 py-2 text-xs">
+              {saving ? <Loader2 size={13} className="animate-spin" /> : copied ? <Check size={13} /> : <Link2 size={13} />}
+              {saving ? "Publishing..." : copied ? "Copied!" : "Copy link"}
+            </button>
+            <button onClick={handleSave} disabled={saving} className="btn btn-primary px-4 py-2 text-xs">
+              {saving ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+              {saving ? "Publishing..." : "Publish"}
+            </button>
+          </div>
+        </div>
+      </div>
+      {previewOpen && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/45 px-4 py-6 sm:py-10">
+          <div className="w-full max-w-3xl overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-100 bg-slate-50/90 px-5 py-4">
+              <div>
+                <div className="mb-2 inline-flex items-center gap-1.5 rounded-full border border-sky-100 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
+                  <Lock size={11} />
+                  {sealEnabled ? "Seal-ready encrypted form" : "Public form"}
+                </div>
+                <h2 className="text-xl font-semibold tracking-tight text-slate-950">{title || "Untitled form"}</h2>
+                {(openAtIso || closeAtIso) && (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Opens {formatScheduleDate(openAtIso)} · Closes {formatScheduleDate(closeAtIso)}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewOpen(false)}
+                className="rounded-md p-1.5 text-slate-400 transition-colors hover:bg-white hover:text-slate-700"
+                aria-label="Close preview"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="space-y-5 p-5 sm:p-6">
+              {fields.map((field) => (
+                <div key={field.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="mb-2 flex items-center gap-2">
+                    <label className="text-sm font-medium text-slate-800">
+                      {field.label || "Untitled field"}
+                      {field.required && <span className="ml-1 text-red-500">*</span>}
+                    </label>
+                    {(sealEnabled || field.encrypted) && <Lock size={12} className="text-sky-500" />}
+                  </div>
+                  <FormPreviewControl
+                    field={field}
+                    value={previewAnswers[field.id] ?? emptyPreviewValue(field)}
+                    onChange={(value) =>
+                      setPreviewAnswers((current) => ({
+                        ...current,
+                        [field.id]: value,
+                      }))
+                    }
+                  />
+                </div>
+              ))}
+              {fields.length === 0 && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-400">
+                  No fields added.
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end border-t border-slate-100 bg-slate-50/80 px-5 py-4">
+              <button type="button" onClick={() => setPreviewOpen(false)} className="btn btn-secondary text-xs">
+                Close preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
     </AdminGate>
   );

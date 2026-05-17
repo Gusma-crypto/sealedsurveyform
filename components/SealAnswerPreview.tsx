@@ -6,6 +6,10 @@ import { Lock, Loader2, Unlock } from "lucide-react";
 import type { FieldAnswer } from "@/types";
 import { formatDecryptedSealValue, getSealConfig, isSealConfigured, sealDecryptValue } from "@/lib/seal";
 
+const SEAL_HEALTHCHECK_HEADERS = {
+  "Client-Sdk-Version": "1.0.0",
+};
+
 function formatAnswerValue(value: FieldAnswer["value"]) {
   if (Array.isArray(value)) return value.join(", ");
   if (value === null || value === "") return "-";
@@ -35,6 +39,7 @@ export async function checkSealKeyServerReachable() {
     try {
       await fetch(explicitUrl, {
         method: "GET",
+        headers: SEAL_HEALTHCHECK_HEADERS,
         signal: controller.signal,
       });
     } catch (err) {
@@ -57,6 +62,7 @@ export async function checkSealKeyServerReachable() {
   try {
     await fetch(serviceUrl, {
       method: "GET",
+      headers: SEAL_HEALTHCHECK_HEADERS,
       signal: controller.signal,
     });
   } catch (err) {
