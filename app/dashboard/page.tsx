@@ -10,8 +10,12 @@ import { shortenAddress } from "@/lib/admin";
 import {
   buildSetSubmissionReviewTx,
   isSuiRegistryConfigured,
+  loadLocalFormRegistryEntries,
+  loadLocalSubmissionRegistryEntries,
   loadRegisteredForms,
   loadRegisteredSubmissions,
+  type FormRegistryEntry,
+  type SubmissionRegistryEntry,
 } from "@/lib/submissionRegistry";
 import { shortenBlobId, blobUrl } from "@/lib/walrus";
 import { createSignedSealSessionKey, formatDecryptedSealValue, sealDecryptValueWithSession } from "@/lib/seal";
@@ -68,6 +72,45 @@ function dedupeSubmissions(items: FormSubmission[]) {
     unique.push(item);
   }
   return unique;
+}
+
+function formSchemaFromRegistryEntry(entry: FormRegistryEntry): FormSchema {
+  return {
+    id: entry.formId,
+    title: entry.formTitle,
+    fields: [],
+    sealEncrypted: false,
+    createdAt: entry.timestamp,
+    walrusBlobId: entry.formBlobId,
+    suiFormObjectId: entry.suiFormObjectId,
+    shareSlug: entry.shareSlug,
+    ownerAddress: entry.ownerAddress,
+  };
+}
+
+function submissionFromRegistryEntry(
+  entry: SubmissionRegistryEntry,
+  formsById: Map<string, FormRegistryEntry>
+): FormSubmission {
+  const form = formsById.get(entry.formId);
+  return {
+    id: entry.chainSubmissionId ?? entry.submissionBlobId,
+    formId: entry.formId,
+    formTitle: entry.formTitle,
+    answers: [],
+    submittedAt: entry.timestamp,
+    walrusBlobId: entry.submissionBlobId,
+    formWalrusBlobId: form?.formBlobId,
+    suiFormObjectId: entry.suiFormObjectId,
+    formShareSlug: form?.shareSlug,
+    encrypted: entry.encrypted,
+    priority: "low",
+    status: "new",
+    submitterAddress: entry.submitterAddress,
+    formOwnerAddress: form?.ownerAddress,
+    registryTxDigest: entry.txDigest,
+    chainSubmissionId: entry.chainSubmissionId,
+  };
 }
 
 function DetailAnswerValue({
@@ -216,23 +259,30 @@ export default function DashboardPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const [registered, registeredForms, localForms] = await Promise.all([
-        loadRegisteredSubmissions(suiClient),
-        loadRegisteredForms(suiClient),
+      const registryConfigured = isSuiRegistryConfigured();
+      const localFormEntries = loadLocalFormRegistryEntries();
+      const localSubmissionEntries = loadLocalSubmissionRegistryEntries();
+      if (localFormEntries.length > 0 || localSubmissionEntries.length > 0) {
+        const localFormsById = new Map(localFormEntries.map((entry) => [entry.formId, entry]));
+        const quickForms = localFormEntries.map(formSchemaFromRegistryEntry);
+        const quickSubmissions = dedupeSubmissions(
+          localSubmissionEntries.map((entry) => submissionFromRegistryEntry(entry, localFormsById))
+        );
+        setForms(quickForms);
+        setSubmissions(quickSubmissions.length > 0 ? quickSubmissions : DEMO_SUBMISSIONS);
+        setIsDemo(quickSubmissions.length === 0);
+        setSource(quickSubmissions.length > 0 ? "local" : "demo");
+        setLoading(false);
+      }
+
+      const [registered, registeredForms, localForms, localSubmissions] = await Promise.all([
+        registryConfigured ? loadRegisteredSubmissions(suiClient) : Promise.resolve([]),
+        registryConfigured ? loadRegisteredForms(suiClient) : Promise.resolve([]),
         loadAllForms().catch(() => []),
+        loadAllSubmissions().catch(() => []),
       ]);
-      const data = dedupeSubmissions(registered.length > 0 ? registered : await loadAllSubmissions());
-      const registryFormSchemas: FormSchema[] = registeredForms.map((entry) => ({
-        id: entry.formId,
-        title: entry.formTitle,
-        fields: [],
-        sealEncrypted: false,
-        createdAt: entry.timestamp,
-        walrusBlobId: entry.formBlobId,
-        suiFormObjectId: entry.suiFormObjectId,
-        shareSlug: entry.shareSlug,
-        ownerAddress: entry.ownerAddress,
-      }));
+      const data = dedupeSubmissions(registered.length > 0 ? registered : localSubmissions);
+      const registryFormSchemas = registeredForms.map(formSchemaFromRegistryEntry);
       const formsById = new Map<string, FormSchema>();
       for (const form of localForms) formsById.set(form.id, form);
       for (const form of registryFormSchemas) formsById.set(form.id, form);
@@ -244,7 +294,7 @@ export default function DashboardPage() {
       } else {
         setSubmissions(data);
         setIsDemo(false);
-        setSource(registered.length > 0 && isSuiRegistryConfigured() ? "sui" : "local");
+        setSource(registered.length > 0 && registryConfigured ? "sui" : "local");
       }
     } catch {
       setForms([]);

@@ -81,7 +81,7 @@ public struct SubmissionReviewUpdated has copy, drop {
     timestamp: String,
 }
 
-public fun seal_approve(registry: &Registry, form_id: String, _id: vector<u8>, ctx: &TxContext) {
+public fun seal_approve(_id: vector<u8>, registry: &Registry, form_id: String, ctx: &TxContext) {
     assert!(table::contains(&registry.forms, form_id), EFormNotFound);
 
     let form = table::borrow(&registry.forms, form_id);
@@ -132,7 +132,7 @@ public fun upsert_form(
     });
 }
 
-public entry fun create_form_object(
+public fun create_form_object(
     form_id: String,
     form_title: String,
     form_blob_id: String,
@@ -164,7 +164,7 @@ public entry fun create_form_object(
     transfer::share_object(form);
 }
 
-public entry fun update_form_object(
+public  fun update_form_object(
     form: &mut FormObject,
     form_title: String,
     form_blob_id: String,
@@ -189,7 +189,7 @@ public entry fun update_form_object(
     });
 }
 
-public entry fun submit_to_form_object(
+public  fun submit_to_form_object(
     form: &mut FormObject,
     submission_blob_id: String,
     encrypted: bool,
@@ -209,7 +209,7 @@ public entry fun submit_to_form_object(
     });
 }
 
-public entry fun set_submission_review(
+public  fun set_submission_review(
     form: &FormObject,
     submission_id: u64,
     status: u8,

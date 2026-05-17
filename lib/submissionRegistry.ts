@@ -83,7 +83,7 @@ export function isSuiRegistryConfigured() {
   return Boolean(config.packageId && config.registryObjectId);
 }
 
-function loadLocalRegistryEntries(): SubmissionRegistryEntry[] {
+export function loadLocalSubmissionRegistryEntries(): SubmissionRegistryEntry[] {
   if (typeof window === "undefined") return [];
   try {
     return JSON.parse(localStorage.getItem(REGISTRY_INDEX_KEY) || "[]");
@@ -97,17 +97,17 @@ function saveLocalRegistryEntries(entries: SubmissionRegistryEntry[]) {
 }
 
 export function recordLocalSubmissionEntry(entry: SubmissionRegistryEntry) {
-  const entries = loadLocalRegistryEntries();
+  const entries = loadLocalSubmissionRegistryEntries();
   if (!entries.some((item) => item.submissionBlobId === entry.submissionBlobId)) {
     saveLocalRegistryEntries([entry, ...entries]);
   }
 }
 
 export function findLocalSubmissionEntry(blobId: string): SubmissionRegistryEntry | null {
-  return loadLocalRegistryEntries().find((entry) => entry.submissionBlobId === blobId) ?? null;
+  return loadLocalSubmissionRegistryEntries().find((entry) => entry.submissionBlobId === blobId) ?? null;
 }
 
-function loadLocalFormRegistryEntries(): FormRegistryEntry[] {
+export function loadLocalFormRegistryEntries(): FormRegistryEntry[] {
   if (typeof window === "undefined") return [];
   try {
     return JSON.parse(localStorage.getItem(FORM_REGISTRY_INDEX_KEY) || "[]");
@@ -469,7 +469,7 @@ export async function loadReviewEntriesFromSui(client: any): Promise<ReviewRegis
 
 export async function loadRegisteredSubmissions(client?: any): Promise<FormSubmission[]> {
   const entries = client ? await loadSubmissionEntriesFromSui(client).catch(() => []) : [];
-  const sourceEntries = entries.length > 0 ? entries : loadLocalRegistryEntries();
+  const sourceEntries = entries.length > 0 ? entries : loadLocalSubmissionRegistryEntries();
   const reviewEntries = client ? await loadReviewEntriesFromSui(client).catch(() => []) : [];
   const latestReview = new Map<string, ReviewRegistryEntry>();
 
