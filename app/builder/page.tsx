@@ -4,7 +4,7 @@ import { useState, useCallback } from "react";
 import { useCurrentAccount, useSignAndExecuteTransaction, useSuiClient } from "@mysten/dapp-kit";
 import {
   Plus, Send, Link2, Copy, Check, Trash2, Lock, LockOpen,
-  AlignLeft, ChevronDown, CheckSquare, Star, Image, Video, Globe, Mail,
+  AlignLeft, ChevronDown, CheckSquare, Star, Image, Video, Globe,
   Shield, Database, Loader2, LayoutTemplate, Eye, X, FileText
 } from "lucide-react";
 import { v4 as uuidv4 } from "uuid";
@@ -29,7 +29,6 @@ const FIELD_TYPES: { type: FieldType; label: string; icon: React.ReactNode }[] =
   { type: "rating", label: "Star rating", icon: <Star size={14} /> },
   { type: "screenshot", label: "Screenshot", icon: <Image size={14} /> },
   { type: "video", label: "Video upload", icon: <Video size={14} /> },
-  { type: "email", label: "Email", icon: <Mail size={14} /> },
   { type: "url", label: "URL", icon: <Globe size={14} /> },
   { type: "text", label: "Short text", icon: <AlignLeft size={14} /> },
 ];
@@ -72,21 +71,6 @@ function makeField(type: FieldType, overrides: Partial<FormField> = {}): FormFie
     maxRating: type === "rating" ? 5 : undefined,
     ...overrides,
   };
-}
-
-function requiredIdentityFields() {
-  return [
-    makeField("text", {
-      label: "username",
-      placeholder: "your_username",
-      required: true,
-    }),
-    makeField("email", {
-      label: "email",
-      placeholder: "name@example.com",
-      required: true,
-    }),
-  ];
 }
 
 type FormTemplate = {
@@ -177,18 +161,15 @@ const FORM_TEMPLATES: FormTemplate[] = [
 ];
 
 function templateFields(template: FormTemplate) {
-  return [
-    ...requiredIdentityFields(),
-    ...template.fields.map((field) =>
-      makeField(field.type, {
-        label: field.label,
-        placeholder: field.placeholder ?? "",
-        required: field.required ?? false,
-        options: field.options ? [...field.options] : undefined,
-        maxRating: field.type === "rating" ? field.maxRating ?? 5 : undefined,
-      })
-    ),
-  ];
+  return template.fields.map((field) =>
+    makeField(field.type, {
+      label: field.label,
+      placeholder: field.placeholder ?? "",
+      required: field.required ?? false,
+      options: field.options ? [...field.options] : undefined,
+      maxRating: field.type === "rating" ? field.maxRating ?? 5 : undefined,
+    })
+  );
 }
 
 function FieldPreview({ field }: { field: FormField }) {
@@ -396,22 +377,11 @@ function validateFormSchema(title: string, fields: FormField[], openAt?: string,
   const issues: SchemaIssue[] = [];
   if (!title.trim()) issues.push({ message: "Form title is required." });
   if (fields.length === 0) issues.push({ message: "Add at least one field." });
+  if (!openAt) issues.push({ message: "Open date is required before publish." });
+  if (!closeAt) issues.push({ message: "Close date is required before publish." });
   if (openAt && closeAt && new Date(openAt).getTime() >= new Date(closeAt).getTime()) {
     issues.push({ message: "Close date must be later than open date." });
   }
-  const usernameField = fields.find((field) => field.label.trim().toLowerCase() === "username");
-  const emailField = fields.find((field) => field.type === "email" || field.label.trim().toLowerCase() === "email");
-  if (!usernameField) {
-    issues.push({ message: "Required field username must be present." });
-  } else if (!usernameField.required) {
-    issues.push({ fieldId: usernameField.id, message: "username must be marked required." });
-  }
-  if (!emailField) {
-    issues.push({ message: "Required field email must be present." });
-  } else if (!emailField.required) {
-    issues.push({ fieldId: emailField.id, message: "email must be marked required." });
-  }
-
   for (const field of fields) {
     if (!field.label.trim()) {
       issues.push({ fieldId: field.id, message: "Field label is required." });
@@ -498,10 +468,7 @@ export default function BuilderPage() {
   const signAndExecute = useSignAndExecuteTransaction();
   const [formId, setFormId] = useState(() => uuidv4());
   const [title, setTitle] = useState("Untitled form");
-  const [fields, setFields] = useState<FormField[]>(() => [
-    ...requiredIdentityFields(),
-    makeField("richtext"),
-  ]);
+  const [fields, setFields] = useState<FormField[]>(() => [makeField("richtext")]);
   const [selected, setSelected] = useState<string>(fields[0].id);
   const [sealEnabled, setSealEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -563,7 +530,10 @@ export default function BuilderPage() {
       }
 
       const draft = JSON.parse(raw) as BuilderDraft;
-      const nextFields = draft.fields?.length ? draft.fields : [...requiredIdentityFields(), makeField("richtext")];
+      const draftFields = draft.fields?.length
+        ? draft.fields.filter((field) => field.label.trim().toLowerCase() !== "username" && field.type !== "email" && field.label.trim().toLowerCase() !== "email")
+        : [];
+      const nextFields = draftFields.length > 0 ? draftFields : [makeField("richtext")];
       setFormId(draft.formId || uuidv4());
       setTitle(draft.title || "Untitled form");
       setFields(nextFields);
@@ -755,25 +725,15 @@ export default function BuilderPage() {
         return;
       }
 
-      const copiedFields = sourceForm.fields.map((field) => {
-        const isUsername = field.label.trim().toLowerCase() === "username";
-        const isEmail = field.type === "email" || field.label.trim().toLowerCase() === "email";
-        return {
+      const copiedFields = sourceForm.fields
+        .filter((field) => field.label.trim().toLowerCase() !== "username" && field.type !== "email" && field.label.trim().toLowerCase() !== "email")
+        .map((field) => ({
           ...field,
           id: uuidv4(),
-          required: isUsername || isEmail ? true : field.required,
+          required: field.required,
           options: field.options ? [...field.options] : undefined,
-        };
-      });
-
-      const hasUsername = copiedFields.some((field) => field.label.trim().toLowerCase() === "username");
-      const hasEmail = copiedFields.some((field) => field.type === "email" || field.label.trim().toLowerCase() === "email");
-      const nextFields = [
-        ...(hasUsername && hasEmail ? [] : requiredIdentityFields().filter((field) =>
-          field.label === "username" ? !hasUsername : !hasEmail
-        )),
-        ...(copiedFields.length > 0 ? copiedFields : [makeField("richtext")]),
-      ];
+        }));
+      const nextFields = copiedFields.length > 0 ? copiedFields : [makeField("richtext")];
 
       setFormId(uuidv4());
       setTitle(`Copy of ${sourceForm.title}`);
@@ -811,7 +771,7 @@ export default function BuilderPage() {
             placeholder="Form title..."
           />
           <p className="mt-1 text-xs text-slate-400">
-            Every form keeps required username and email fields for respondent identity.
+            Respondent username and email are taken from the connected wallet profile, not from form fields.
           </p>
         </div>
       </div>
@@ -902,7 +862,7 @@ export default function BuilderPage() {
               </div>
               <p className="text-xs leading-5 text-slate-500">{template.description}</p>
               <div className="mt-3 text-xs text-slate-400">
-                {template.fields.length + 2} fields including username and email
+                {template.fields.length} fields · profile supplies username and email
               </div>
             </button>
           ))}
@@ -1012,38 +972,6 @@ export default function BuilderPage() {
             </div>
           </div>
 
-          <div className="mt-5 border-t border-slate-100 pt-5">
-            <p className="section-label mb-3">Schedule</p>
-            <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <div>
-                <label className="label">Open date</label>
-                <input
-                  type="datetime-local"
-                  value={openAt}
-                  onChange={(event) => {
-                    setOpenAt(event.target.value);
-                    markDirty();
-                  }}
-                  className="input text-xs"
-                />
-              </div>
-              <div>
-                <label className="label">Close date</label>
-                <input
-                  type="datetime-local"
-                  value={closeAt}
-                  onChange={(event) => {
-                    setCloseAt(event.target.value);
-                    markDirty();
-                  }}
-                  className="input text-xs"
-                />
-              </div>
-              <p className="text-xs leading-5 text-slate-500">
-                Public respondents can submit only within this window.
-              </p>
-            </div>
-          </div>
         </div>
 
         {/* Center: canvas */}
@@ -1056,6 +984,38 @@ export default function BuilderPage() {
             <div className="inline-flex w-fit items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500">
               {fields.length} fields
             </div>
+          </div>
+          <div className="mb-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <p className="section-label mb-3">Schedule</p>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="label">Open date <span className="text-red-500">*</span></label>
+                <input
+                  type="datetime-local"
+                  value={openAt}
+                  onChange={(event) => {
+                    setOpenAt(event.target.value);
+                    markDirty();
+                  }}
+                  className="input text-xs"
+                />
+              </div>
+              <div>
+                <label className="label">Close date <span className="text-red-500">*</span></label>
+                <input
+                  type="datetime-local"
+                  value={closeAt}
+                  onChange={(event) => {
+                    setCloseAt(event.target.value);
+                    markDirty();
+                  }}
+                  className="input text-xs"
+                />
+              </div>
+            </div>
+            <p className="mt-3 text-xs leading-5 text-slate-500">
+              Public respondents can submit only within this window. Open and close dates are required before publish.
+            </p>
           </div>
           <div className="space-y-2">
             {fields.map((f) => (
@@ -1072,11 +1032,6 @@ export default function BuilderPage() {
                       <span className="text-sm font-medium text-slate-800">{f.label}</span>
                       {f.required && <span className="text-red-400 text-base leading-none">*</span>}
                       {f.encrypted && <Lock size={11} className="text-sky-500" />}
-                      {(f.label.trim().toLowerCase() === "username" || f.type === "email" || f.label.trim().toLowerCase() === "email") && (
-                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium text-slate-500">
-                          required identity
-                        </span>
-                      )}
                     </div>
                     <FieldPreview field={f} />
                   </div>

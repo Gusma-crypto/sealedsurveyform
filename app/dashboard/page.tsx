@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useRef, useState } from "react";
 import { ConnectButton, useCurrentAccount, useSignAndExecuteTransaction, useSignPersonalMessage, useSuiClient } from "@mysten/dapp-kit";
-import { Check, ChevronDown, Copy, Download, Database, Lock, LockOpen, RefreshCw, Loader2, ExternalLink, Wallet, Star, Filter as FilterIcon } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, Copy, Download, Database, Lock, LockOpen, RefreshCw, Loader2, ExternalLink, Wallet, Star, Filter as FilterIcon } from "lucide-react";
 import { checkSealKeyServerReachable, readableSealError, SealAnswerPreview } from "@/components/SealAnswerPreview";
 import type { FormSchema, FormSubmission } from "@/types";
 import { loadAllForms, loadAllSubmissions, loadPublicForm } from "@/lib/forms";
@@ -65,10 +65,13 @@ function csvEscape(value: unknown) {
 }
 
 function submissionIdentity(submission: FormSubmission) {
+  if (submission.walrusBlobId) {
+    return submission.walrusBlobId;
+  }
   if (submission.suiFormObjectId && submission.chainSubmissionId) {
     return `${submission.suiFormObjectId}:${submission.chainSubmissionId}`;
   }
-  return submission.walrusBlobId || submission.id;
+  return submission.id;
 }
 
 function dedupeSubmissions(items: FormSubmission[]) {
@@ -138,6 +141,7 @@ function submissionFromRegistryEntry(
     priority: "low",
     status: "new",
     submitterAddress: entry.submitterAddress,
+    submitterEmail: entry.submitterEmail,
     formOwnerAddress: form?.ownerAddress,
     registryTxDigest: entry.txDigest,
     chainSubmissionId: entry.chainSubmissionId,
@@ -403,6 +407,7 @@ export default function DashboardPage() {
   const [copiedFormId, setCopiedFormId] = useState<string | null>(null);
   const [isDemo, setIsDemo] = useState(false);
   const [source, setSource] = useState<"sui" | "local" | "demo">("demo");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [updatingReviewId, setUpdatingReviewId] = useState<string | null>(null);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<string | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -420,6 +425,7 @@ export default function DashboardPage() {
 
   const load = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const registryConfigured = isSuiRegistryConfigured();
       const localFormEntries = loadLocalFormRegistryEntries();
@@ -482,11 +488,16 @@ export default function DashboardPage() {
         setIsDemo(false);
         setSource(registeredEntries.length > 0 && registryConfigured ? "sui" : "local");
       }
-    } catch {
-      setForms([]);
-      setSubmissions(DEMO_SUBMISSIONS);
-      setIsDemo(true);
-      setSource("demo");
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "Unable to load dashboard data.");
+      const [localForms, localSubmissions] = await Promise.all([
+        loadAllForms().catch(() => []),
+        loadAllSubmissions().catch(() => []),
+      ]);
+      setForms(localForms);
+      setSubmissions(localSubmissions);
+      setIsDemo(false);
+      setSource("local");
     } finally {
       setLoading(false);
     }
@@ -532,6 +543,7 @@ export default function DashboardPage() {
   }
 
   function emailForSubmission(submission: FormSubmission) {
+    if (submission.submitterEmail) return submission.submitterEmail.toLowerCase();
     const emailAnswer = submission.answers.find((answer) => {
       const field = fieldForAnswerValue(submission, answer.fieldId);
       return field?.type === "email" || field?.label.toLowerCase().includes("email");
@@ -636,6 +648,8 @@ export default function DashboardPage() {
                 suiPackageId: item.suiPackageId ?? detail.suiPackageId,
                 formShareSlug: item.formShareSlug ?? detail.formShareSlug,
                 submitterAddress: detail.submitterAddress ?? item.submitterAddress,
+                submitterUsername: detail.submitterUsername ?? item.submitterUsername,
+                submitterEmail: detail.submitterEmail ?? item.submitterEmail,
                 formOwnerAddress: detail.formOwnerAddress ?? item.formOwnerAddress,
                 registryTxDigest: item.registryTxDigest ?? detail.registryTxDigest,
                 chainSubmissionId: item.chainSubmissionId ?? detail.chainSubmissionId,
@@ -687,6 +701,8 @@ export default function DashboardPage() {
             formTitle: submission.formTitle || detail.formTitle,
             walrusBlobId: submission.walrusBlobId,
             submitterAddress: detail.submitterAddress ?? submission.submitterAddress,
+            submitterUsername: detail.submitterUsername ?? submission.submitterUsername,
+            submitterEmail: detail.submitterEmail ?? submission.submitterEmail,
             formOwnerAddress: detail.formOwnerAddress ?? submission.formOwnerAddress,
             registryTxDigest: submission.registryTxDigest ?? detail.registryTxDigest,
             chainSubmissionId: submission.chainSubmissionId ?? detail.chainSubmissionId,
@@ -1117,6 +1133,12 @@ export default function DashboardPage() {
           {source === "sui"
             ? "Showing submissions discovered from the Sui registry."
             : "Showing local fallback submissions. Configure Sui registry env to enable global discovery."}
+        </div>
+      )}
+      {loadError && (
+        <div className="mb-5 flex items-start gap-2 rounded-lg border border-amber-100 bg-amber-50 px-4 py-2.5 text-sm text-amber-800 shadow-sm">
+          <AlertCircle size={14} className="mt-0.5 shrink-0" />
+          Sui/Walrus discovery failed: {loadError}. Showing local data only.
         </div>
       )}
 
@@ -1659,16 +1681,22 @@ export default function DashboardPage() {
 	                              Loading detail from Walrus...
 	                            </div>
 	                          )}
-	                          <div className="grid gap-2 px-4 py-3 sm:grid-cols-[180px_1fr]">
-	                            <div className="text-xs font-medium uppercase text-slate-400">wallet</div>
-	                            <div className="break-all font-mono text-xs text-slate-700">{s.submitterAddress ?? "-"}</div>
-	                          </div>
-	                          <div className="grid gap-2 px-4 py-3 sm:grid-cols-[180px_1fr]">
-	                            <div className="text-xs font-medium uppercase text-slate-400">email</div>
-	                            <div className="text-sm text-slate-700">
-	                              {detailRows.email.answer ? (
-	                                <DetailAnswerValue
-	                                  answer={detailRows.email.answer}
+                          <div className="grid gap-2 px-4 py-3 sm:grid-cols-[180px_1fr]">
+                            <div className="text-xs font-medium uppercase text-slate-400">wallet</div>
+                            <div className="break-all font-mono text-xs text-slate-700">{s.submitterAddress ?? "-"}</div>
+                          </div>
+                          <div className="grid gap-2 px-4 py-3 sm:grid-cols-[180px_1fr]">
+                            <div className="text-xs font-medium uppercase text-slate-400">username</div>
+                            <div className="text-sm text-slate-700">{s.submitterUsername || "-"}</div>
+                          </div>
+                          <div className="grid gap-2 px-4 py-3 sm:grid-cols-[180px_1fr]">
+                            <div className="text-xs font-medium uppercase text-slate-400">email</div>
+                            <div className="text-sm text-slate-700">
+                              {s.submitterEmail ? (
+                                s.submitterEmail
+                              ) : detailRows.email.answer ? (
+                                <DetailAnswerValue
+                                  answer={detailRows.email.answer}
 	                                  submission={s}
 	                                  field={detailRows.email.field}
 	                                  decryptedValue={decryptedAnswers[answerDecryptKey(s, detailRows.email.answer)]}

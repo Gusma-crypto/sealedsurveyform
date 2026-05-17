@@ -17,7 +17,9 @@ import type { FieldAnswer, FormField, FormSchema, FormSubmission } from "@/types
 import { loadPublicForm, saveSubmission } from "@/lib/forms";
 import { createWalletWalrusSigner, uploadFileToWalrus } from "@/lib/walrus";
 import { createSealIdentity, isSealConfigured, sealEncryptValue } from "@/lib/seal";
+import { hasRequiredProfile, loadStoredProfile, normalizedProfileEmail } from "@/lib/profile";
 import {
+  appendRegisterSubmissionCall,
   buildRegisterSubmissionTx,
   buildSubmitFormObjectTx,
   findSubmissionEventId,
@@ -101,18 +103,6 @@ function isValidEmail(value: string | string[] | number | null) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
 
-function findEmailField(form: FormSchema) {
-  return form.fields.find(
-    (field) => field.type === "email" || field.label.trim().toLowerCase() === "email"
-  );
-}
-
-function getNormalizedEmail(form: FormSchema, answers: Answers) {
-  const emailField = findEmailField(form);
-  const value = emailField ? answers[emailField.id] : null;
-  return typeof value === "string" ? normalizeUniqueValue(value) : "";
-}
-
 async function findDuplicateSubmission({
   form,
   walletAddress,
@@ -189,6 +179,17 @@ function validateMediaFile(field: FormField, file: File) {
   if (field.type === "video" && file.type && !file.type.startsWith("video/")) {
     throw new Error(`${field.label || "Video"} must be a video file.`);
   }
+}
+
+function readableSubmitError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/EDuplicateWallet|MoveAbort.*2|abort.*2/i.test(message)) {
+    return "This wallet has already submitted this form.";
+  }
+  if (/EDuplicateEmail|MoveAbort.*3|abort.*3/i.test(message)) {
+    return "This email has already submitted this form.";
+  }
+  return message || "Unable to submit this response.";
 }
 
 function formatScheduleDate(value?: string) {
@@ -512,6 +513,8 @@ export default function PublicFormPage() {
     });
   }, [answers, form]);
   const availability = form ? getFormAvailability(form) : null;
+  const connectedProfile = account ? loadStoredProfile(account.address) : null;
+  const profileComplete = connectedProfile ? hasRequiredProfile(connectedProfile) : false;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -538,7 +541,15 @@ export default function PublicFormPage() {
     }
 
     const normalizedWalletAddress = normalizeUniqueValue(account.address);
-    const normalizedEmail = getNormalizedEmail(form, answers);
+    const profile = loadStoredProfile(account.address);
+    if (!hasRequiredProfile(profile)) {
+      setSubmitState({
+        status: "error",
+        message: "Lengkapi profile username dan email yang valid terlebih dahulu dari menu profile wallet.",
+      });
+      return;
+    }
+    const normalizedEmail = normalizedProfileEmail(profile);
     const duplicateMessage = await findDuplicateSubmission({
       form,
       walletAddress: normalizedWalletAddress,
@@ -626,6 +637,8 @@ export default function PublicFormPage() {
         priority: inferPriority(normalizedAnswers),
         status: "new",
         submitterAddress: normalizedWalletAddress,
+        submitterUsername: profile.username.trim(),
+        submitterEmail: normalizedEmail,
         formOwnerAddress: form.ownerAddress,
       };
 
@@ -635,6 +648,10 @@ export default function PublicFormPage() {
         formTitle: form.title,
         submissionBlobId: blobId,
         submitterAddress: normalizedWalletAddress,
+        submitterEmail: normalizedEmail,
+        sealIds: normalizedAnswers
+          .filter((answer) => answer.encrypted && answer.encryption === "seal" && answer.sealId)
+          .map((answer) => answer.sealId!),
         encrypted: submission.encrypted,
         timestamp: submission.submittedAt,
         suiFormObjectId: form.suiFormObjectId,
@@ -646,6 +663,7 @@ export default function PublicFormPage() {
           ...registryEntry,
           suiFormObjectId: form.suiFormObjectId,
         });
+        appendRegisterSubmissionCall(tx, registryEntry);
         const transaction = await tx.toJSON({ client: suiClient as any });
         const result = await signAndExecute.mutateAsync({ transaction });
         const digest = "digest" in result ? result.digest : undefined;
@@ -678,7 +696,7 @@ export default function PublicFormPage() {
     } catch (err) {
       setSubmitState({
         status: "error",
-        message: err instanceof Error ? err.message : "Unable to submit this response.",
+        message: readableSubmitError(err),
       });
     }
   }
@@ -738,6 +756,12 @@ export default function PublicFormPage() {
             )}
           </div>
         )}
+        {account && !profileComplete && (
+          <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-sm text-amber-800 shadow-sm">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            Lengkapi username dan email yang valid di menu profile wallet sebelum submit. Data identity tidak lagi diisi dari field form.
+          </div>
+        )}
       </div>
 
       <form onSubmit={handleSubmit} className="panel overflow-hidden">
@@ -795,7 +819,7 @@ export default function PublicFormPage() {
 
         <div className="flex flex-col gap-3 border-t border-slate-100 bg-slate-50/70 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <p className="text-xs leading-5 text-slate-500">
-            Submissions are stored as Walrus blobs. Seal encryption wiring is prepared for the next integration step.
+            Text/private answers can be Seal encrypted. Media files are stored on Walrus for preview and download.
           </p>
           <button
             type="submit"

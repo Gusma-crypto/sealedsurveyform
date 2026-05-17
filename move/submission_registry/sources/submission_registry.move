@@ -1,6 +1,7 @@
 module sealedsurvey::submission_registry;
 
 use std::string::String;
+use std::vector;
 use sui::event;
 use sui::object::{Self, UID};
 use sui::table::{Self, Table};
@@ -9,6 +10,8 @@ use sui::tx_context::{Self, TxContext};
 
 const EFormNotFound: u64 = 0;
 const ENotFormOwner: u64 = 1;
+const EDuplicateWallet: u64 = 2;
+const EDuplicateEmail: u64 = 3;
 
 public struct Registry has key {
     id: UID,
@@ -24,6 +27,9 @@ public struct FormObject has key {
     form_blob_id: String,
     share_slug: String,
     submission_count: u64,
+    submitted_wallets: Table<address, bool>,
+    submitted_emails: Table<String, bool>,
+    seal_readers: Table<vector<u8>, address>,
 }
 
 public struct FormRecord has store {
@@ -32,6 +38,9 @@ public struct FormRecord has store {
     form_blob_id: String,
     share_slug: String,
     updated_at: String,
+    submitted_wallets: Table<address, bool>,
+    submitted_emails: Table<String, bool>,
+    seal_readers: Table<vector<u8>, address>,
 }
 
 public struct SubmissionRegistered has copy, drop {
@@ -39,6 +48,7 @@ public struct SubmissionRegistered has copy, drop {
     form_title: String,
     submission_blob_id: String,
     submitter_address: address,
+    submitter_email: String,
     encrypted: bool,
     timestamp: String,
 }
@@ -68,6 +78,7 @@ public struct FormObjectSubmissionRegistered has copy, drop {
     submission_id: u64,
     submission_blob_id: String,
     submitter_address: address,
+    submitter_email: String,
     encrypted: bool,
     timestamp: String,
 }
@@ -85,7 +96,11 @@ public fun seal_approve(_id: vector<u8>, registry: &Registry, form_id: String, c
     assert!(table::contains(&registry.forms, form_id), EFormNotFound);
 
     let form = table::borrow(&registry.forms, form_id);
-    assert!(form.owner == tx_context::sender(ctx), ENotFormOwner);
+    let sender = tx_context::sender(ctx);
+    let is_owner = form.owner == sender;
+    let is_submitter = table::contains(&form.seal_readers, _id)
+        && *table::borrow(&form.seal_readers, _id) == sender;
+    assert!(is_owner || is_submitter, ENotFormOwner);
 }
 
 fun init(ctx: &mut TxContext) {
@@ -119,6 +134,9 @@ public fun upsert_form(
             form_blob_id,
             share_slug,
             updated_at: timestamp,
+            submitted_wallets: table::new<address, bool>(ctx),
+            submitted_emails: table::new<String, bool>(ctx),
+            seal_readers: table::new<vector<u8>, address>(ctx),
         });
     };
 
@@ -149,6 +167,9 @@ public fun create_form_object(
         form_blob_id,
         share_slug,
         submission_count: 0,
+        submitted_wallets: table::new<address, bool>(ctx),
+        submitted_emails: table::new<String, bool>(ctx),
+        seal_readers: table::new<vector<u8>, address>(ctx),
     };
 
     event::emit(FormObjectUpserted {
@@ -192,10 +213,27 @@ public  fun update_form_object(
 public  fun submit_to_form_object(
     form: &mut FormObject,
     submission_blob_id: String,
+    submitter_email: String,
+    seal_ids: vector<vector<u8>>,
     encrypted: bool,
     timestamp: String,
     ctx: &TxContext,
 ) {
+    let sender = tx_context::sender(ctx);
+    assert!(!table::contains(&form.submitted_wallets, sender), EDuplicateWallet);
+    assert!(!table::contains(&form.submitted_emails, submitter_email), EDuplicateEmail);
+
+    table::add(&mut form.submitted_wallets, sender, true);
+    table::add(&mut form.submitted_emails, submitter_email, true);
+
+    let mut i = 0;
+    let len = vector::length(&seal_ids);
+    while (i < len) {
+        let seal_id = *vector::borrow(&seal_ids, i);
+        table::add(&mut form.seal_readers, seal_id, sender);
+        i = i + 1;
+    };
+
     form.submission_count = form.submission_count + 1;
 
     event::emit(FormObjectSubmissionRegistered {
@@ -203,7 +241,8 @@ public  fun submit_to_form_object(
         form_id: form.form_id,
         submission_id: form.submission_count,
         submission_blob_id,
-        submitter_address: tx_context::sender(ctx),
+        submitter_address: sender,
+        submitter_email,
         encrypted,
         timestamp,
     });
@@ -230,20 +269,40 @@ public  fun set_submission_review(
 }
 
 public fun register_submission(
-    _registry: &mut Registry,
+    registry: &mut Registry,
     form_id: String,
     form_title: String,
     submission_blob_id: String,
-    _submitter_address: String,
+    submitter_email: String,
+    seal_ids: vector<vector<u8>>,
     encrypted: bool,
     timestamp: String,
     ctx: &mut TxContext,
 ) {
+    assert!(table::contains(&registry.forms, form_id), EFormNotFound);
+
+    let sender = tx_context::sender(ctx);
+    let form = table::borrow_mut(&mut registry.forms, form_id);
+    assert!(!table::contains(&form.submitted_wallets, sender), EDuplicateWallet);
+    assert!(!table::contains(&form.submitted_emails, submitter_email), EDuplicateEmail);
+
+    table::add(&mut form.submitted_wallets, sender, true);
+    table::add(&mut form.submitted_emails, submitter_email, true);
+
+    let mut i = 0;
+    let len = vector::length(&seal_ids);
+    while (i < len) {
+        let seal_id = *vector::borrow(&seal_ids, i);
+        table::add(&mut form.seal_readers, seal_id, sender);
+        i = i + 1;
+    };
+
     event::emit(SubmissionRegistered {
         form_id,
         form_title,
         submission_blob_id,
-        submitter_address: tx_context::sender(ctx),
+        submitter_address: sender,
+        submitter_email,
         encrypted,
         timestamp,
     });

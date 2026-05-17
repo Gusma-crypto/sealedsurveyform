@@ -62,6 +62,8 @@ export interface FormSubmission {
   priority?: "low" | "medium" | "high";
   status?: "new" | "reviewing" | "done";
   submitterAddress?: string;
+  submitterUsername?: string;
+  submitterEmail?: string;
   formOwnerAddress?: string;
   registryTxDigest?: string;
   chainSubmissionId?: string;

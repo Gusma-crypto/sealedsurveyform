@@ -8,6 +8,7 @@ import { ExternalLink, Lock, LogOut, Moon, PlusCircle, Settings, Sun, User } fro
 import { clsx } from "clsx";
 import { canCreateFormsAddress, shortenAddress } from "@/lib/admin";
 import { loadAllSubmissions } from "@/lib/forms";
+import { emptyProfile, loadStoredProfile, saveStoredProfile, type AccountProfile } from "@/lib/profile";
 import type { FormSubmission } from "@/types";
 
 const NAV_LINKS = [
@@ -17,39 +18,6 @@ const NAV_LINKS = [
 ];
 
 type ProfileTab = "profile" | "submissions" | "settings";
-
-type AccountProfile = {
-  username: string;
-  email: string;
-  x: string;
-  telegram: string;
-  discord: string;
-};
-
-const emptyProfile: AccountProfile = {
-  username: "",
-  email: "",
-  x: "",
-  telegram: "",
-  discord: "",
-};
-
-function profileStorageKey(address: string) {
-  return `sealedsurvey:profile:${address.toLowerCase()}`;
-}
-
-function loadStoredProfile(address: string): AccountProfile {
-  try {
-    const raw = localStorage.getItem(profileStorageKey(address));
-    return raw ? { ...emptyProfile, ...JSON.parse(raw) } : emptyProfile;
-  } catch {
-    return emptyProfile;
-  }
-}
-
-function saveStoredProfile(address: string, profile: AccountProfile) {
-  localStorage.setItem(profileStorageKey(address), JSON.stringify(profile));
-}
 
 function submissionIdentity(submission: FormSubmission) {
   return submission.walrusBlobId || submission.id;
@@ -285,6 +253,9 @@ export function Navbar() {
                           <div className="text-xs font-medium text-slate-500 dark:text-slate-300">Connected address</div>
                           <div className="mt-1 break-all font-mono text-xs text-slate-800 dark:text-white">{account.address}</div>
                         </div>
+                        <p className="text-xs leading-5 text-slate-400 dark:text-slate-300">
+                          Profile data is saved locally in this browser for this wallet.
+                        </p>
                         <button type="button" onClick={saveProfile} className="btn btn-primary w-full text-xs">
                           {profileSaved ? "Updated" : "Update profile"}
                         </button>
@@ -365,6 +336,9 @@ export function Navbar() {
                             className="input mt-1 text-sm"
                           />
                         </label>
+                        <p className="text-xs leading-5 text-slate-400 dark:text-slate-300">
+                          Social links are local profile settings and are not written on-chain.
+                        </p>
                         <button type="button" onClick={saveProfile} className="btn btn-primary w-full text-xs">
                           {profileSaved ? "Saved" : "Save settings"}
                         </button>

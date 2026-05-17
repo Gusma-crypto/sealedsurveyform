@@ -1,6 +1,7 @@
 import { Transaction } from "@mysten/sui/transactions";
 import type { FormSubmission } from "@/types";
 import { downloadFromWalrus } from "@/lib/walrus";
+import { hexToBytes } from "@/lib/seal";
 
 const REGISTRY_INDEX_KEY = "sealedsurvey:registry:submissions";
 const FORM_REGISTRY_INDEX_KEY = "sealedsurvey:registry:forms";
@@ -10,6 +11,8 @@ export interface SubmissionRegistryEntry {
   formTitle: string;
   submissionBlobId: string;
   submitterAddress?: string;
+  submitterEmail?: string;
+  sealIds?: string[];
   encrypted: boolean;
   timestamp: string;
   txDigest?: string;
@@ -141,7 +144,8 @@ export function buildRegisterSubmissionTx(entry: SubmissionRegistryEntry) {
       tx.pure.string(entry.formId),
       tx.pure.string(entry.formTitle),
       tx.pure.string(entry.submissionBlobId),
-      tx.pure.string(entry.submitterAddress ?? ""),
+      tx.pure.string(entry.submitterEmail ?? ""),
+      tx.pure.vector("vector<u8>", (entry.sealIds ?? []).map(hexToBytes)),
       tx.pure.bool(entry.encrypted),
       tx.pure.string(entry.timestamp),
     ],
@@ -160,7 +164,8 @@ export function appendRegisterSubmissionCall(tx: Transaction, entry: SubmissionR
       tx.pure.string(entry.formId),
       tx.pure.string(entry.formTitle),
       tx.pure.string(entry.submissionBlobId),
-      tx.pure.string(entry.submitterAddress ?? ""),
+      tx.pure.string(entry.submitterEmail ?? ""),
+      tx.pure.vector("vector<u8>", (entry.sealIds ?? []).map(hexToBytes)),
       tx.pure.bool(entry.encrypted),
       tx.pure.string(entry.timestamp),
     ],
@@ -242,6 +247,8 @@ export function buildSubmitFormObjectTx(entry: SubmissionRegistryEntry & { suiFo
     arguments: [
       tx.object(entry.suiFormObjectId),
       tx.pure.string(entry.submissionBlobId),
+      tx.pure.string(entry.submitterEmail ?? ""),
+      tx.pure.vector("vector<u8>", (entry.sealIds ?? []).map(hexToBytes)),
       tx.pure.bool(entry.encrypted),
       tx.pure.string(entry.timestamp),
     ],
@@ -421,6 +428,7 @@ export async function loadSubmissionEntriesFromSui(client: any): Promise<Submiss
         formTitle: json.formTitle ?? json.form_title ?? "Untitled form",
         submissionBlobId,
         submitterAddress: json.submitterAddress ?? json.submitter_address,
+        submitterEmail: json.submitterEmail ?? json.submitter_email,
         encrypted: Boolean(json.encrypted),
         timestamp: json.timestamp ?? new Date(Number(event.timestampMs ?? Date.now())).toISOString(),
         txDigest: event.id?.txDigest,
