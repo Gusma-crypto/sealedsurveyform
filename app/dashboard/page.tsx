@@ -21,6 +21,7 @@ import {
 } from "@/lib/submissionRegistry";
 import { downloadFromWalrus, shortenBlobId, blobUrl } from "@/lib/walrus";
 import { createSignedSealSessionKey, formatDecryptedSealValue, sealDecryptValueWithSession } from "@/lib/seal";
+import { suiObjectUrl, suiTxUrl } from "@/lib/suiExplorer";
 
 type Filter = "all" | "new" | "reviewing" | "done" | "high";
 
@@ -1098,9 +1099,15 @@ export default function DashboardPage() {
 	                              </button>
 	                            )}
 	                            {s.suiFormObjectId ? (
-	                              <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-100 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700">
+	                              <a
+	                                href={suiObjectUrl(s.suiFormObjectId)}
+	                                target="_blank"
+	                                rel="noopener noreferrer"
+	                                className="inline-flex items-center gap-1.5 rounded-full border border-sky-100 bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700 transition-colors hover:border-sky-200"
+	                              >
 	                                Sui object {shortObjectId(s.suiFormObjectId)}
-	                              </span>
+	                                <ExternalLink size={10} />
+	                              </a>
 	                            ) : (
 	                              <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-100 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
 	                                Walrus-only
@@ -1110,6 +1117,28 @@ export default function DashboardPage() {
 	                              <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500">
 	                                Submission #{s.chainSubmissionId}
 	                              </span>
+	                            )}
+	                            {s.registryTxDigest && (
+	                              <a
+	                                href={suiTxUrl(s.registryTxDigest)}
+	                                target="_blank"
+	                                rel="noopener noreferrer"
+	                                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500 transition-colors hover:border-sky-200 hover:text-sky-700"
+	                              >
+	                                Sui tx
+	                                <ExternalLink size={10} />
+	                              </a>
+	                            )}
+	                            {s.reviewTxDigest && (
+	                              <a
+	                                href={suiTxUrl(s.reviewTxDigest)}
+	                                target="_blank"
+	                                rel="noopener noreferrer"
+	                                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-500 transition-colors hover:border-sky-200 hover:text-sky-700"
+	                              >
+	                                Review tx
+	                                <ExternalLink size={10} />
+	                              </a>
 	                            )}
 	                          </div>
 	                        </div>

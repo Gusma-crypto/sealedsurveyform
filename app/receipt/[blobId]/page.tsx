@@ -18,19 +18,12 @@ import { SealAnswerPreview } from "@/components/SealAnswerPreview";
 import type { FieldAnswer, FormSubmission } from "@/types";
 import { blobUrl, downloadFromWalrus, shortenBlobId } from "@/lib/walrus";
 import { findLocalSubmissionEntry } from "@/lib/submissionRegistry";
+import { suiObjectUrl, suiTxUrl } from "@/lib/suiExplorer";
 
 function formatAnswer(answer: FieldAnswer) {
   if (Array.isArray(answer.value)) return answer.value.join(", ");
   if (answer.value === null || answer.value === "") return "No answer";
   return String(answer.value);
-}
-
-function suiTxUrl(digest: string) {
-  return `https://suiexplorer.com/txblock/${digest}?network=testnet`;
-}
-
-function suiObjectUrl(objectId: string) {
-  return `https://suiexplorer.com/object/${objectId}?network=testnet`;
 }
 
 function Step({
@@ -148,6 +141,39 @@ export default function ReceiptPage() {
           <p className="mt-2 text-sm leading-6 text-slate-500">
             Your response for {submission.formTitle} was uploaded to Walrus. Keep this page as your receipt.
           </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {submission.registryTxDigest && (
+              <a
+                href={suiTxUrl(submission.registryTxDigest)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-secondary px-3 py-1.5 text-xs"
+              >
+                <ExternalLink size={12} />
+                Open Sui tx
+              </a>
+            )}
+            {submission.suiFormObjectId && (
+              <a
+                href={suiObjectUrl(submission.suiFormObjectId)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-secondary px-3 py-1.5 text-xs"
+              >
+                <ExternalLink size={12} />
+                Open Sui object
+              </a>
+            )}
+            <a
+              href={blobUrl(blobId)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-secondary px-3 py-1.5 text-xs"
+            >
+              <ExternalLink size={12} />
+              Open Walrus blob
+            </a>
+          </div>
         </div>
 
         <div className="grid gap-3 border-b border-slate-100 bg-slate-50/70 p-5 sm:grid-cols-3">
@@ -257,6 +283,17 @@ export default function ReceiptPage() {
               <div className="break-all font-mono text-xs text-sky-900">
                 {submission.suiFormObjectId ?? "-"}
               </div>
+              {submission.suiFormObjectId && (
+                <a
+                  href={suiObjectUrl(submission.suiFormObjectId)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-sky-700 hover:text-sky-900"
+                >
+                  Explorer
+                  <ExternalLink size={10} />
+                </a>
+              )}
             </div>
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <div className="mb-2 text-xs font-medium text-slate-500">Chain submission id</div>
@@ -269,6 +306,17 @@ export default function ReceiptPage() {
               <div className="break-all font-mono text-xs text-slate-900">
                 {submission.registryTxDigest ?? "-"}
               </div>
+              {submission.registryTxDigest && (
+                <a
+                  href={suiTxUrl(submission.registryTxDigest)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-sky-700 hover:text-sky-900"
+                >
+                  Explorer
+                  <ExternalLink size={10} />
+                </a>
+              )}
             </div>
           </div>
         )}
