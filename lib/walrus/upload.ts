@@ -4,6 +4,38 @@ import { uploadBytesWithWalrusSdk } from "./sdk";
 import type { WalrusUploadOptions, WalrusUploadResult } from "./types";
 import { blobUrl, normalizeWalrusBlobId } from "./util";
 
+const WALRUS_CACHE_PREFIX = "sealedsurvey:walrus-cache:";
+const WALRUS_CACHE_VERSION = 1;
+
+function readWalrusCache<T>(blobId: string): T | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(`${WALRUS_CACHE_PREFIX}${blobId}`);
+    if (!raw) return null;
+    const cached = JSON.parse(raw);
+    if (cached?.version !== WALRUS_CACHE_VERSION) return null;
+    return cached.value as T;
+  } catch {
+    return null;
+  }
+}
+
+function writeWalrusCache(blobId: string, value: unknown) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(
+      `${WALRUS_CACHE_PREFIX}${blobId}`,
+      JSON.stringify({
+        version: WALRUS_CACHE_VERSION,
+        cachedAt: new Date().toISOString(),
+        value,
+      })
+    );
+  } catch {
+    // Ignore cache quota failures; Walrus remains the source of truth.
+  }
+}
+
 function normalizeUploadOptions(optionsOrEpochs?: WalrusUploadOptions | number): WalrusUploadOptions {
   return typeof optionsOrEpochs === "number" ? { epochs: optionsOrEpochs } : optionsOrEpochs ?? {};
 }
@@ -78,6 +110,9 @@ export async function uploadFileToWalrus(
 
 export async function downloadFromWalrus<T = unknown>(blobId: string): Promise<T> {
   const normalizedBlobId = normalizeWalrusBlobId(blobId);
+  const cached = readWalrusCache<T>(normalizedBlobId);
+  if (cached !== null) return cached;
+
   try {
     const client = await getWalrusClient();
     const [file] = await client.getFiles({ ids: [normalizedBlobId] });
@@ -86,8 +121,11 @@ export async function downloadFromWalrus<T = unknown>(blobId: string): Promise<T
       : await client.readBlob({ blobId: normalizedBlobId });
     const text = new TextDecoder().decode(bytes);
     try {
-      return JSON.parse(text) as T;
+      const parsed = JSON.parse(text) as T;
+      writeWalrusCache(normalizedBlobId, parsed);
+      return parsed;
     } catch {
+      writeWalrusCache(normalizedBlobId, text);
       return text as unknown as T;
     }
   } catch {
@@ -98,8 +136,11 @@ export async function downloadFromWalrus<T = unknown>(blobId: string): Promise<T
 
     const text = await response.text();
     try {
-      return JSON.parse(text) as T;
+      const parsed = JSON.parse(text) as T;
+      writeWalrusCache(normalizedBlobId, parsed);
+      return parsed;
     } catch {
+      writeWalrusCache(normalizedBlobId, text);
       return text as unknown as T;
     }
   }

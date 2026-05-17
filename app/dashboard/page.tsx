@@ -12,12 +12,14 @@ import {
   isSuiRegistryConfigured,
   loadLocalFormRegistryEntries,
   loadLocalSubmissionRegistryEntries,
+  loadReviewEntriesFromSui,
   loadRegisteredForms,
-  loadRegisteredSubmissions,
+  loadSubmissionEntriesFromSui,
   type FormRegistryEntry,
+  type ReviewRegistryEntry,
   type SubmissionRegistryEntry,
 } from "@/lib/submissionRegistry";
-import { shortenBlobId, blobUrl } from "@/lib/walrus";
+import { downloadFromWalrus, shortenBlobId, blobUrl } from "@/lib/walrus";
 import { createSignedSealSessionKey, formatDecryptedSealValue, sealDecryptValueWithSession } from "@/lib/seal";
 
 type Filter = "all" | "new" | "reviewing" | "done" | "high";
@@ -129,6 +131,30 @@ function submissionFromRegistryEntry(
     registryTxDigest: entry.txDigest,
     chainSubmissionId: entry.chainSubmissionId,
   };
+}
+
+function applyReviewMetadata(submissions: FormSubmission[], reviews: ReviewRegistryEntry[]) {
+  const latestReview = new Map<string, ReviewRegistryEntry>();
+  for (const review of reviews) {
+    const key = `${review.suiFormObjectId}:${review.chainSubmissionId}`;
+    const existing = latestReview.get(key);
+    if (!existing || new Date(review.timestamp).getTime() > new Date(existing.timestamp).getTime()) {
+      latestReview.set(key, review);
+    }
+  }
+
+  return submissions.map((submission) => {
+    if (!submission.suiFormObjectId || !submission.chainSubmissionId) return submission;
+    const review = latestReview.get(`${submission.suiFormObjectId}:${submission.chainSubmissionId}`);
+    return review
+      ? {
+          ...submission,
+          status: review.status,
+          priority: review.priority,
+          reviewTxDigest: review.txDigest,
+        }
+      : submission;
+  });
 }
 
 function DetailAnswerValue({
@@ -268,6 +294,8 @@ export default function DashboardPage() {
   const [updatingReviewId, setUpdatingReviewId] = useState<string | null>(null);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState<string | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [loadingDetailId, setLoadingDetailId] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
   const [decryptingSubmissionId, setDecryptingSubmissionId] = useState<string | null>(null);
   const [decryptError, setDecryptError] = useState<string | null>(null);
   const [decryptedAnswers, setDecryptedAnswers] = useState<Record<string, string>>({});
@@ -297,16 +325,29 @@ export default function DashboardPage() {
         setLoading(false);
       }
 
-      const [registered, registeredForms, localForms, localSubmissions] = await Promise.all([
-        registryConfigured ? loadRegisteredSubmissions(suiClient) : Promise.resolve([]),
+      const [registeredEntries, registeredForms, reviewEntries, localForms] = await Promise.all([
+        registryConfigured ? loadSubmissionEntriesFromSui(suiClient).catch(() => []) : Promise.resolve([]),
         registryConfigured ? loadRegisteredForms(suiClient) : Promise.resolve([]),
+        registryConfigured ? loadReviewEntriesFromSui(suiClient).catch(() => []) : Promise.resolve([]),
         loadAllForms().catch(() => []),
-        loadAllSubmissions().catch(() => []),
       ]);
-      const data = dedupeSubmissions(registered.length > 0 ? registered : localSubmissions);
       const registryFormSchemas = await Promise.all(
         registeredForms.map(hydrateFormSchemaFromRegistryEntry)
       );
+      const registryFormsById = new Map(registeredForms.map((entry) => [entry.formId, entry]));
+      const localFormsById = new Map(localFormEntries.map((entry) => [entry.formId, entry]));
+      const metadataSubmissions =
+        registeredEntries.length > 0
+          ? applyReviewMetadata(
+              dedupeSubmissions(registeredEntries.map((entry) => submissionFromRegistryEntry(entry, registryFormsById))),
+              reviewEntries
+            )
+          : localSubmissionEntries.length > 0
+            ? dedupeSubmissions(localSubmissionEntries.map((entry) => submissionFromRegistryEntry(entry, localFormsById)))
+            : [];
+      const data = metadataSubmissions.length > 0
+        ? metadataSubmissions
+        : dedupeSubmissions(await loadAllSubmissions().catch(() => []));
       const formsById = new Map<string, FormSchema>();
       for (const form of localForms) formsById.set(form.id, form);
       for (const form of registryFormSchemas) {
@@ -327,7 +368,7 @@ export default function DashboardPage() {
       } else {
         setSubmissions(data);
         setIsDemo(false);
-        setSource(registered.length > 0 && registryConfigured ? "sui" : "local");
+        setSource(registeredEntries.length > 0 && registryConfigured ? "sui" : "local");
       }
     } catch {
       setForms([]);
@@ -433,6 +474,57 @@ export default function DashboardPage() {
 
   const answerDecryptKey = (submission: FormSubmission, answer: FormSubmission["answers"][number]) =>
     `${submissionIdentity(submission)}:${answer.fieldId}:${answer.sealId ?? ""}`;
+
+  const loadSubmissionDetail = async (submission: FormSubmission) => {
+    const identity = submissionIdentity(submission);
+    if (submission.answers.length > 0) return;
+
+    setLoadingDetailId(identity);
+    setDetailError(null);
+    try {
+      const detail = await downloadFromWalrus<FormSubmission>(submission.walrusBlobId);
+      setSubmissions((current) =>
+        current.map((item) =>
+          submissionIdentity(item) === identity
+            ? {
+                ...item,
+                ...detail,
+                id: item.id,
+                formId: item.formId || detail.formId,
+                formTitle: item.formTitle || detail.formTitle,
+                walrusBlobId: item.walrusBlobId,
+                formWalrusBlobId: item.formWalrusBlobId ?? detail.formWalrusBlobId,
+                suiFormObjectId: item.suiFormObjectId ?? detail.suiFormObjectId,
+                suiPackageId: item.suiPackageId ?? detail.suiPackageId,
+                formShareSlug: item.formShareSlug ?? detail.formShareSlug,
+                submitterAddress: detail.submitterAddress ?? item.submitterAddress,
+                formOwnerAddress: detail.formOwnerAddress ?? item.formOwnerAddress,
+                registryTxDigest: item.registryTxDigest ?? detail.registryTxDigest,
+                chainSubmissionId: item.chainSubmissionId ?? detail.chainSubmissionId,
+                reviewTxDigest: item.reviewTxDigest ?? detail.reviewTxDigest,
+                status: item.status ?? detail.status,
+                priority: item.priority ?? detail.priority,
+              }
+            : item
+        )
+      );
+    } catch (err) {
+      setDetailError(err instanceof Error ? err.message : "Unable to load respondent detail from Walrus.");
+    } finally {
+      setLoadingDetailId(null);
+    }
+  };
+
+  const toggleSubmissionDetail = (submission: FormSubmission) => {
+    const identity = submissionIdentity(submission);
+    if (selectedSubmissionId === identity) {
+      setSelectedSubmissionId(null);
+      setDetailError(null);
+      return;
+    }
+    setSelectedSubmissionId(identity);
+    loadSubmissionDetail(submission);
+  };
 
   const getSignedSealSessionKey = async () => {
     if (!account) {
@@ -966,11 +1058,15 @@ export default function DashboardPage() {
 	                  <td className="px-4 py-3 text-right">
 	                    <button
 	                      type="button"
-	                      onClick={() => setSelectedSubmissionId(expanded ? null : identity)}
+	                      onClick={() => toggleSubmissionDetail(s)}
 	                      className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition-colors hover:border-sky-200 hover:text-sky-700"
 	                    >
-	                      <ChevronDown size={12} className={`transition-transform ${expanded ? "rotate-180" : ""}`} />
-	                      {expanded ? "Collapse" : "Detail"}
+	                      {loadingDetailId === identity ? (
+	                        <Loader2 size={12} className="animate-spin" />
+	                      ) : (
+	                        <ChevronDown size={12} className={`transition-transform ${expanded ? "rotate-180" : ""}`} />
+	                      )}
+	                      {loadingDetailId === identity ? "Loading" : expanded ? "Collapse" : "Detail"}
 	                    </button>
 	                  </td>
 	                </tr>
@@ -1017,12 +1113,23 @@ export default function DashboardPage() {
 	                            )}
 	                          </div>
 	                        </div>
+	                        {detailError && selectedSubmissionId === identity && (
+	                          <div className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
+	                            {detailError}
+	                          </div>
+	                        )}
 	                        {decryptError && selectedSubmissionId === identity && (
 	                          <div className="mb-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
 	                            {decryptError}
 	                          </div>
 	                        )}
 	                        <div className="divide-y divide-slate-200 overflow-hidden rounded-lg border border-slate-200 bg-white">
+	                          {loadingDetailId === identity && s.answers.length === 0 && (
+	                            <div className="flex items-center justify-center gap-2 px-4 py-8 text-sm text-slate-400">
+	                              <Loader2 size={14} className="animate-spin" />
+	                              Loading detail from Walrus...
+	                            </div>
+	                          )}
 	                          <div className="grid gap-2 px-4 py-3 sm:grid-cols-[180px_1fr]">
 	                            <div className="text-xs font-medium uppercase text-slate-400">wallet</div>
 	                            <div className="break-all font-mono text-xs text-slate-700">{s.submitterAddress ?? "-"}</div>
